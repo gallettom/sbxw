@@ -1,9 +1,9 @@
 //! The branch graph of the Worktrees view: for one repository of a
 //! sandbox, the main checkout's branch as one horizontal lane and each
 //! UNMERGED thread branch (a tip with commits of its own) as a lane under
-//! it, forking from its merge-base and running to its tip. Merged worktrees
-//! and branches with no commits of their own are not drawn (they stay in the
-//! list with their chip).
+//! it, forking from its merge-base and running to its tip. A branch with
+//! nothing ahead of the base is not drawn, merged or with no commit yet: it
+//! stays in the list, where its row says which (`worktrees::branch_word`).
 //!
 //! The data mapping is the web UI's (`assets/js/worktrees.js`, `wtLayout`):
 //! columns are the base's first-parent commits (`log`, newest first in the
@@ -52,7 +52,10 @@ pub struct Extra<'a> {
     pub word: &'a str,
 }
 
-/// Whether a thread is drawn: a tip and commits of its own.
+/// Whether a thread is drawn: a tip and commits of its own. Not whether it
+/// is merged: a branch with nothing ahead has no lane to draw, merged or not
+/// yet committed to; its row says which (`worktrees::branch_word`). A
+/// branch with commits ahead is never "merged" there either.
 pub fn unmerged(t: &J) -> bool {
     t["tip"].is_string() && t["ahead"].as_u64().unwrap_or(0) > 0
 }
