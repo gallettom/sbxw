@@ -987,7 +987,8 @@ pane's sandbox's group colour (`app.groups`, `App::pane_focus_color`), else
 (`sandboxes.luau`, `lit_of`), the row of that pane's sandbox has a 3 pt bar
 of it on its left edge (`lit-row-<name>`), in the 7 pt column the row always
 keeps, so nothing moves; a sandbox that wants you keeps its amber notch
-there instead. With several sessions, the line of the session that pane
+there instead. The row also rests on `hover-subtle` (`elevated` under the
+pointer), so the notch's row still says it. With several sessions, the line of the session that pane
 shows (main or a thread) has a 2 pt bar of it before its mark
 (`lit-line-<name>-<id>`); the session block keeps its own tint (a second
 one would take `text-muted` under 4.5:1). A pane with no sandbox marks no

@@ -465,7 +465,10 @@ local function item(sb, app, data)
     help = name .. ": " .. st.word .. ", " .. model,
     shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } },
     h = 52, w = "full", gap = 8, align = "stretch", radius = "sm",
-    fill = selected and "elevated" or nil, hover = selected and "elevated" or "hover-subtle",
+    -- The focused pane's sandbox also rests on the hover tint (stronger
+    -- under the pointer): said even when its edge is the amber notch.
+    fill = selected and "elevated" or ((lit and lit.sandbox == name) and "hover-subtle" or nil),
+    hover = (selected or (lit and lit.sandbox == name)) and "elevated" or "hover-subtle",
     -- The left edge: "wants you"'s notch, else, on the row of the focused
     -- pane's sandbox, a 3 pt bar in that pane's colour (lit_of). In the
     -- column the row always keeps, so nothing on it moves.

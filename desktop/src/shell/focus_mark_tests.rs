@@ -56,7 +56,6 @@ fn rig(panes: &[P], per: usize, sidebar: Option<f32>) -> Rig {
     let wake: Wake = Arc::new(|| {});
     a.waker = Some(wake.clone());
     let opened = Arc::new(AtomicUsize::new(0));
-    a.daemon = Some(Arc::new(Counting(opened.clone())));
     for (i, (_, thread, mode)) in panes.iter().enumerate() {
         let (ev_tx, events) = mpsc::channel::<TermEvent>();
         let (input, in_rx) = mpsc::channel::<TermInput>();
@@ -72,8 +71,11 @@ fn rig(panes: &[P], per: usize, sidebar: Option<f32>) -> Rig {
     a.run_intent("test", Intent::Pages(PageOp::Per(per)));
     a.focused = 0;
     let rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
-    let mut r = Rig { rt, opened };
+    let mut r = Rig { rt, opened: opened.clone() };
     r.settle();
+    // The fixture's link came up and put its own daemon in: ours again,
+    // once it has (the link comes up once).
+    r.rt.update(move |s, _| s.daemon = Some(Arc::new(Counting(opened))));
     r
 }
 
@@ -150,6 +152,8 @@ const A: Mode = Mode::Agent;
 fn focusing_a_pane_marks_its_row_and_only_it_in_the_pane_colour() {
     let mut r = rig(&[("cobalt", None, A), ("ember", None, A), ("ivy", None, A)], 4, None);
     assert_eq!(r.lit(), ["lit-row-cobalt"], "pane 1 focused at the start");
+    assert_eq!(find(&r.list(), "row-cobalt").unwrap().style.fill, theme::color_value("hover-subtle"));
+    assert_eq!(find(&r.list(), "row-ember").unwrap().style.fill, None, "a row not focused rests on the ground");
     // cobalt has no workspace: the accent, as the pane's border.
     let accent = theme::color_value("accent").unwrap();
     assert_eq!(r.rt.state.pane_focus_color(0), accent);
@@ -161,7 +165,8 @@ fn focusing_a_pane_marks_its_row_and_only_it_in_the_pane_colour() {
     assert_eq!(r.rt.state.pane_focus_color(1), c);
     assert_eq!(find(&r.list(), "lit-row-ember").unwrap().style.fill, Some(c));
     // A mark only: no control, nothing a press would run.
-    let n = find(&r.list(), "lit-row-ember").unwrap();
+    let list = r.list();
+    let n = find(&list, "lit-row-ember").unwrap();
     assert!(n.on.is_none() && n.children.is_empty());
     // A press in pane 3 (the core's focus follows it): the mark follows too.
     r.press("pane-3");
@@ -209,12 +214,15 @@ fn the_same_sandbox_in_another_mode_is_not_the_same_session() {
 fn a_sandbox_in_two_panes_marks_its_row_and_the_session_line_of_the_focused_one() {
     let mut r = rig(&[("atlas-web", None, A), ("atlas-web", Some("search"), A), ("cobalt", None, A)], 4, None);
     let c = r.rt.state.group_colors()["atlas-web"];
-    // The main session's pane focused: the row, and the line "main".
-    assert_eq!(r.lit(), ["lit-row-atlas-web", "lit-line-atlas-web-main"]);
+    // The main session's pane focused: the line "main"; the row's edge is
+    // its amber notch (a session wants you), the row on the hover tint.
+    assert_eq!(r.lit(), ["lit-line-atlas-web-main"]);
+    let list = r.list();
+    assert_eq!(find(&list, "row-atlas-web").unwrap().style.fill, theme::color_value("hover-subtle"));
     assert_eq!(find(&r.list(), "lit-line-atlas-web-main").unwrap().style.fill, Some(c));
     // The thread's pane focused: the same row, the thread's line instead.
     r.focus(1);
-    assert_eq!(r.lit(), ["lit-row-atlas-web", "lit-line-atlas-web-search"]);
+    assert_eq!(r.lit(), ["lit-line-atlas-web-search"]);
     assert_eq!(r.rt.state.pane_focus_color(1), c, "both panes of the group in its colour");
     // From pane 3, the row leads to the pane of its main session.
     r.focus(2);
@@ -232,7 +240,7 @@ fn a_session_line_focuses_the_pane_that_shows_that_thread() {
     assert_eq!(r.rt.state.focused, 1, "the thread's pane");
     assert_eq!(r.opened(), n0, "nothing opened");
     assert_eq!(r.shows(2).0.as_deref(), Some("cobalt"));
-    assert_eq!(r.lit(), ["lit-row-atlas-web", "lit-line-atlas-web-search"]);
+    assert_eq!(r.lit(), ["lit-line-atlas-web-search"]);
 }
 
 #[test]
