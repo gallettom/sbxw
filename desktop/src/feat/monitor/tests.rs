@@ -2984,7 +2984,8 @@ fn a_press_on_a_ready_preview_opens_the_dialog_and_reads_the_file_once() {
     // Redraws and session reports while it shows: nothing read again, nothing forgotten.
     let more = { let a = run(&d, "monitor_refresh", json!({})).unwrap(); serve_all(&mut d, a) };
     let info = d["sessions"][1].clone();
-    let more2 = serve_all(&mut d, on_event(&Ctx { data: &d }, "session", &info));
+    let ev = on_event(&Ctx { data: &d }, "session", &info);
+    let more2 = serve_all(&mut d, ev);
     assert!(zoom_calls(&mut d).is_empty());
     assert!(forgotten(&more).is_empty() && forgotten(&more2).is_empty(), "{more2:?}");
     assert_eq!(STATE().lock().unwrap().pics.zoom.as_ref().map(|z| z.path.clone()).as_deref(), Some(BIG));
@@ -3163,7 +3164,7 @@ fn hostile_text_in_the_file_name_makes_no_control() {
 
 /// Through the App, the `pictures` fixture with a big screenshot: a press
 /// on the preview opens the dialog (no text selected), the picture fitted
-/// inside the window at a wide, a narrow and a short size; Escape closes it;
+/// inside the window at a wide, a narrow, a short and a tall size; Escape closes it;
 /// a drag across the prompt over the previews still selects the texts.
 #[test]
 fn the_dialog_opens_on_a_press_stays_inside_the_window_and_escape_closes_it() {
@@ -3198,7 +3199,7 @@ fn the_dialog_opens_on_a_press_stays_inside_the_window_and_escape_closes_it() {
         rt.frame(1.0 / 60.0);
     };
     let rect = |rt: &rune::Runtime<App>, k: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k) && !e.exiting).map(|e| e.rect);
-    for (w, h) in [(1284.0, 816.0), (420.0, 700.0), (1284.0, 420.0)] {
+    for (w, h) in [(1284.0, 816.0), (420.0, 700.0), (1284.0, 420.0), (1284.0, 1400.0)] {
         let a = App::new(crate::shell::Args { fixture: Some(path.to_string_lossy().into()), ..Default::default() });
         let mut rt = rune::Runtime::new(a, shell_view, (w, h), rune::Env::new(true, 1.0));
         rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
@@ -3253,7 +3254,8 @@ fn the_dialog_opens_on_a_press_stays_inside_the_window_and_escape_closes_it() {
         quiet(&mut rt);
         assert!(crate::picture::shown(&zk).is_none(), "{w}x{h}: forgotten");
         assert!(rt.state.feats.data[PICTURE_UI].is_null());
-        if (w, h) != (1284.0, 816.0) {
+        // Tall enough for the whole prompt to show under the header.
+        if (w, h) != (1284.0, 1400.0) {
             continue;
         }
         // A drag from the prompt's text, over the previews, into the reply: the texts selected, nothing opened.
@@ -3261,7 +3263,9 @@ fn the_dialog_opens_on_a_press_stays_inside_the_window_and_escape_closes_it() {
         let reply = conv_rows(&rt.state.feats.data["monitor"]).into_iter().find(|r| r["t"] == "claude").unwrap();
         let cl = rect(&rt, &format!("monitor-body-claude-{}", reply["id"].as_str().unwrap())).unwrap();
         let pr = rect(&rt, &k).unwrap();
-        let (x0, y0) = (body[0] + 13.0, body[1] + 20.0);
+        // On the prompt's last line of text, just above its previews (its top may be scrolled away).
+        let (x0, y0) = (body[0] + 13.0, pr[1] - 16.0);
+        assert!(y0 > body[1] + 12.0, "{body:?} {pr:?}");
         rt.pointer_move(x0, y0);
         rt.pointer_down(x0, y0);
         rt.frame(1.0 / 60.0);
