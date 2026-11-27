@@ -2862,7 +2862,9 @@ paging block), `counts` (`you`, `working`, `idle`, `ended`, `total`),
 `question {answerable, steps: [{text, options: [{label, desc}]}]}`,
 `permission`, `compose {can, why, target}`, `sent`, `pane`, `files`
 (`[{id, name, size, state: ok|look|refused|uploaded, why, sending,
-progress}]`, the name already cut by the Rust), `sending`, `attach_max`). Started from
+progress, img}]`, the name already cut by the Rust; `img`: a pasted
+picture's thumbnail key), `sending`, `attach_max`). A `conv` row of the
+person's (`t = "you"`) may carry `pics` (`[{key, w, h} | {note}]`, below). Started from
 `data.sessions` when the view opens (`monitor_open`), then kept from each
 `session` event, one card per place (a sandbox's thread, or its main
 checkout, as the sidebar folds them: a new session there takes the card and
@@ -2933,6 +2935,26 @@ send that stopped keeps its daemon path and goes with the next Send (the core
 forgets a local path once uploaded). Names: cut in a chip, control and
 direction characters as `?`; whole in the dialog, those characters written
 out; the log gets counts and `what` lines without names.
+
+**Pictures sent.** A prompt of the person's whose text holds the path of a
+picture sbxw uploaded shows it small under the text (`image`, 180 x 120 pt
+at most, inside the bubble at every width; no action of its own). Only
+paths under `/tmp/sbxw-pastes/<name>` and `/tmp/sbxw-uploads/<n>/<name>`, a
+plain name (no `/`, no `..`, not hidden, no control or invisible character)
+ending in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`, and only in the
+person's prompts: a path in a reply, a step, a result, a question or another
+session's message is never read (`monitor/pics.rs`). Read with the Files
+view's route (`GET /api/sandboxes/:name/fs/file?path=..&max=..`, its 24 MB
+cap), only for the session shown and the rows drawn, its newest 12 paths,
+two reads at a time, each once; decoded by `crate::picture` and kept at 360
+px. Another session selected, or the view left: every preview is forgotten
+(`Action::Image` with no bytes). A picture gone, too large, not decodable or
+a GIF (not decoded here) is one muted line ("Picture no longer in the
+sandbox", "Picture too large to preview", "Picture cannot be previewed",
+"GIF pictures are not previewed"), never a notice. A pasted picture's chip
+shows its thumbnail (from the bytes in memory) until it is removed or sent;
+a file attached by its path keeps the plain chip (the feature reads no
+local path). Fixture: `fixtures/monitor/pictures.json`.
 
 ### Overlays
 
