@@ -1029,16 +1029,24 @@ struct McpSaveBody {
     spec: mcp::McpSpec,
     /// The name being edited: removed once the new spec has been checked.
     replace: Option<String>,
-    /// Header placeholder → value; an empty value keeps the stored secret.
+    /// Header placeholder → value, and `client_secret` for a spec with an
+    /// OAuth client id; an empty value keeps the stored secret.
     #[serde(default)]
     secrets: BTreeMap<String, String>,
 }
 
 /// Create a server, or edit one: sbx has no edit, so it is `rm` then `add`.
+/// An OAuth client's secret is stored first (sbx reads it at the add, and a
+/// failure to store it then removes nothing); header secrets after, as sbx
+/// resolves them per request.
 async fn mcp_save(State(app): S, Json(b): Json<McpSaveBody>) -> ApiResult {
     b.spec.add_args()?;
     let name = mcp::check_name(&b.spec.name)?;
     let keys = b.spec.placeholders();
+    if let Some(value) = b.secrets.get(mcp::CLIENT_SECRET).filter(|v| !v.is_empty() && b.spec.takes_client_secret()) {
+        tracing::info!("web UI: storing the OAuth client secret of MCP server {name}");
+        app.sbx.secret_set(&mcp::secret_service(&name, mcp::CLIENT_SECRET), value, None).await?;
+    }
     if let Some(old) = &b.replace {
         let old = mcp::check_name(old)?;
         tracing::info!("web UI: replacing MCP server {old} with {name}");
@@ -2196,6 +2204,56 @@ mod tests {
         let body: Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap()).unwrap();
         assert_eq!(body, json!({ "ok": true, "name": "chat-1" }));
         assert!(bring_up_answer(Err(anyhow::anyhow!("sbx failed")), json!({})).is_err());
+    }
+
+    fn mcp_body(v: Value) -> Json<McpSaveBody> {
+        Json(serde_json::from_value(v).unwrap())
+    }
+
+    #[tokio::test]
+    async fn mcp_an_oauth_client_secret_is_stored_before_the_add_and_never_in_argv() {
+        let (_dir, app, fake) = crate::testing::app_with(crate::testing::sbx_answer);
+        let spec = json!({ "name": "github", "kind": "remote", "url": "https://api.githubcopilot.com/mcp", "headers": ["Authorization: Bearer ${pat}"], "client_id": "Iv1.abc" });
+        let _ = mcp_save(State(app.clone()), mcp_body(json!({ "spec": spec, "secrets": { "client_secret": "s3cr3t-value", "pat": "p4t-value" } }))).await.unwrap();
+        let log = fake.log();
+        let at = |p: &str| log.iter().position(|l| l.starts_with(p)).unwrap_or_else(|| panic!("{p}: {log:?}"));
+        assert!(at("secret set mcp:github:client_secret") < at("mcp add github"), "{log:?}");
+        assert!(at("mcp add github") < at("secret set mcp:github:pat"), "{log:?}");
+        assert!(log.iter().any(|l| l.contains("--client-id=Iv1.abc")), "{log:?}");
+        assert!(!log.iter().any(|l| l.contains("s3cr3t") || l.contains("p4t")), "a secret never in argv: {log:?}");
+        let stdins: Vec<String> = fake.stdins.lock().unwrap().iter().map(|b| String::from_utf8_lossy(b).into_owned()).collect();
+        assert!(stdins.contains(&"s3cr3t-value".to_string()), "{stdins:?}");
+    }
+
+    #[tokio::test]
+    async fn mcp_an_empty_client_secret_keeps_the_stored_one_and_none_goes_without_a_client_id() {
+        let (_dir, app, fake) = crate::testing::app_with(crate::testing::sbx_answer);
+        let spec = json!({ "name": "github", "kind": "remote", "url": "https://x", "client_id": "abc" });
+        let _ = mcp_save(State(app.clone()), mcp_body(json!({ "spec": spec, "replace": "github", "secrets": { "client_secret": "" } }))).await.unwrap();
+        assert!(!fake.called("secret set"), "{:?}", fake.log());
+        assert!(fake.called("mcp rm github") && fake.called("mcp add github"), "{:?}", fake.log());
+        let spec = json!({ "name": "plain", "kind": "remote", "url": "https://x" });
+        let _ = mcp_save(State(app.clone()), mcp_body(json!({ "spec": spec, "secrets": { "client_secret": "ignored" } }))).await.unwrap();
+        assert!(!fake.called("secret set"), "no client id, no client secret: {:?}", fake.log());
+        let clash = json!({ "name": "c", "kind": "remote", "url": "https://x", "headers": ["X-K: ${client_secret}"] });
+        assert!(mcp_save(State(app), mcp_body(json!({ "spec": clash }))).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn mcp_sbx_asking_for_a_client_id_says_to_fill_the_field() {
+        let (_dir, app, _fake) = crate::testing::app_with(|a: &[String]| {
+            if a.starts_with(&["mcp".to_string(), "add".to_string()]) {
+                sbxw_sbx::runner::Output::fail(1, r#"error: server "github" advertises no registration endpoint (no dynamic client registration); --client-id is required to register it"#)
+            } else {
+                crate::testing::sbx_answer(a)
+            }
+        });
+        let spec = json!({ "name": "github", "kind": "remote", "url": "https://api.githubcopilot.com/mcp" });
+        let e = mcp_save(State(app.clone()), mcp_body(json!({ "spec": spec }))).await.unwrap_err();
+        assert!(e.message.contains("needs an OAuth client ID") && e.message.contains("--client-id is required"), "{}", e.message);
+        let spec = json!({ "name": "github", "kind": "remote", "url": "https://api.githubcopilot.com/mcp", "client_id": "abc" });
+        let e = mcp_save(State(app), mcp_body(json!({ "spec": spec }))).await.unwrap_err();
+        assert!(!e.message.contains("needs an OAuth client ID"), "{}", e.message);
     }
 
     #[tokio::test]

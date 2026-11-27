@@ -134,6 +134,9 @@ pub struct KitFileIn {
 }
 
 /// An MCP server as a proposal carries it: the MCP dialog's form, stored.
+/// No OAuth client ID: Jarvis does not propose one (a field it sends under
+/// that name is dropped, so the diff the person approves never has
+/// `--client-id`); a server that needs one is added in the MCP dialog.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpServerSpec {
@@ -158,6 +161,7 @@ impl McpServerSpec {
             command: self.command.clone(),
             args: self.args.clone(),
             dir: self.dir.clone(),
+            client_id: String::new(),
         }
     }
 }
@@ -2384,6 +2388,15 @@ mod tests {
         let replace = plan(&w, &[change(json!({"kind": "mcp_server", "spec": {"name": "github", "kind": "remote", "url": "https://x"}}))]).unwrap();
         assert!(replace[0].view.diff.starts_with("- sbx mcp rm github\n"));
         assert!(plan(&w, &[change(json!({"kind": "mcp_remove", "name": "nope"}))]).is_err());
+    }
+
+    #[test]
+    fn jarvis_never_proposes_an_oauth_client_id() {
+        let w = world();
+        let p = plan(&w, &[change(json!({"kind": "mcp_server", "spec": {"name": "acme", "kind": "remote", "url": "https://x", "client_id": "abc"}}))]).unwrap();
+        assert!(!p[0].view.diff.contains("--client-id"), "{}", p[0].view.diff);
+        let Op::McpAdd { spec, .. } = &p[0].op else { panic!("{:?}", p[0].op) };
+        assert!(spec.client_id.is_empty());
     }
 
     #[test]

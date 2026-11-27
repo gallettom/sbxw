@@ -7,10 +7,25 @@
 //! A remote server is always added with `--skip-auth`: an OAuth flow started
 //! from the daemon would wait on a browser nobody watches, so authorizing stays
 //! `sbx mcp auth <name>` in a terminal.
+//!
+//! A server that offers no dynamic client registration (GitHub's) needs a
+//! pre-registered OAuth client: `client_id` goes to sbx as `--client-id`, and
+//! a confidential client's secret is stored as `mcp:<name>:client_secret`
+//! ([`CLIENT_SECRET`]) before the add, never in argv. That key is reserved: a
+//! header placeholder cannot take it.
 
 use serde::{Deserialize, Serialize};
 
 const ARG_LIMIT: usize = 2048;
+const CLIENT_ID_LIMIT: usize = 256;
+
+/// The secret key a pre-registered OAuth client's secret is stored under,
+/// `mcp:<name>:client_secret`, as sbx reads it.
+pub const CLIENT_SECRET: &str = "client_secret";
+
+/// What sbx says when a server needs `--client-id` (sbx 0.5x: "... no dynamic
+/// client registration); --client-id is required to register it").
+const NEEDS_CLIENT_ID: &str = "--client-id is required";
 
 /// One row of `sbx mcp ls --format json` (0.48+: a bare array). `detail` is
 /// the whole row: fields beyond `name` and `type` are undocumented, so the UI
@@ -54,6 +69,9 @@ pub struct McpSpec {
     pub args: Vec<String>,
     #[serde(default)]
     pub dir: String,
+    /// A pre-registered OAuth client's id, remote only; empty is none.
+    #[serde(default)]
+    pub client_id: String,
 }
 
 /// Also names the server's secrets (`mcp:<name>:<key>`): only characters a
@@ -80,6 +98,26 @@ fn value(v: &str, what: &str) -> Result<String, String> {
     Ok(v.to_string())
 }
 
+/// An OAuth client id: one token of the characters client ids use (letters,
+/// digits, `-._~:@/+=`), not starting with '-'.
+pub fn check_client_id(id: &str) -> Result<String, String> {
+    let id = id.trim();
+    if id.is_empty() || id.len() > CLIENT_ID_LIMIT {
+        return Err(format!("an OAuth client ID is 1 to {CLIENT_ID_LIMIT} characters"));
+    }
+    if id.starts_with('-') || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~' | ':' | '@' | '/' | '+' | '=')) {
+        return Err("an OAuth client ID is letters, digits and - . _ ~ : @ / + =, not starting with '-'".into());
+    }
+    Ok(id.to_string())
+}
+
+/// sbx's refusal of an add, with what to do when the server wants a client
+/// id and none was given. The refusal is sbx's words, kept whole.
+pub fn add_error_hint(spec: &McpSpec, said: &str) -> Option<&'static str> {
+    (said.contains(NEEDS_CLIENT_ID) && spec.client_id.trim().is_empty())
+        .then_some("this server needs an OAuth client ID: fill the \"OAuth client ID\" field with the id of an OAuth app registered with the server's provider (GitHub: Settings, Developer settings, OAuth Apps)")
+}
+
 impl McpSpec {
     /// The argv of `sbx mcp add` for this spec, or why it cannot be added.
     pub fn add_args(&self) -> Result<Vec<String>, String> {
@@ -101,9 +139,18 @@ impl McpSpec {
                     seen.push(key);
                     a.push(format!("--header={h}"));
                 }
+                if self.placeholders().iter().any(|k| k == CLIENT_SECRET) {
+                    return Err(format!("${{{CLIENT_SECRET}}} is the OAuth client secret's own key: name the header's secret otherwise"));
+                }
+                if !self.client_id.trim().is_empty() {
+                    a.push(format!("--client-id={}", check_client_id(&self.client_id)?));
+                }
                 a.push("--skip-auth".into());
             }
             "stdio" => {
+                if !self.client_id.trim().is_empty() {
+                    return Err("an OAuth client ID is for a remote server, not a local command".into());
+                }
                 a.push(format!("--command={}", value(&self.command, "the command")?));
                 let args: Vec<&str> = self.args.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
                 if args.iter().any(|s| s.contains(',')) {
@@ -138,6 +185,11 @@ impl McpSpec {
             }
         }
         out
+    }
+
+    /// Whether the add stores an OAuth client secret: only with a client id.
+    pub fn takes_client_secret(&self) -> bool {
+        self.kind == "remote" && !self.client_id.trim().is_empty()
     }
 }
 
@@ -201,5 +253,48 @@ mod tests {
         assert!(McpSpec { kind: "other".into(), ..ok }.add_args().is_err());
         let stdio = McpSpec { name: "s".into(), kind: "stdio".into(), command: "node".into(), args: vec!["a,b".into()], ..Default::default() };
         assert!(stdio.add_args().is_err());
+    }
+
+    #[test]
+    fn a_client_id_goes_to_sbx_as_one_flag_before_skip_auth() {
+        let spec = McpSpec {
+            name: "github".into(),
+            kind: "remote".into(),
+            url: "https://api.githubcopilot.com/mcp".into(),
+            headers: vec!["X-MCP-Toolsets: repos".into()],
+            client_id: " Iv1.0123abcd ".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            spec.add_args().unwrap(),
+            ["mcp", "add", "github", "--url=https://api.githubcopilot.com/mcp", "--header=X-MCP-Toolsets: repos", "--client-id=Iv1.0123abcd", "--skip-auth"]
+        );
+        assert!(spec.takes_client_secret());
+        assert!(!McpSpec { client_id: "".into(), ..spec.clone() }.takes_client_secret());
+        assert_eq!(secret_service("github", CLIENT_SECRET), "mcp:github:client_secret");
+        for ok in ["abc", "my-preregistered-client", "a.b_c~d:e@f/g+h=", "x".repeat(256).as_str()] {
+            assert!(check_client_id(ok).is_ok(), "{ok}");
+        }
+        for bad in ["-x", "--force", "a b", "a\nb", "a;b", "a,b", "é", "x".repeat(257).as_str()] {
+            assert!(McpSpec { client_id: bad.into(), ..spec.clone() }.add_args().is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_client_id_is_remote_only_and_its_secret_key_is_reserved() {
+        let stdio = McpSpec { name: "s".into(), kind: "stdio".into(), command: "node".into(), client_id: "abc".into(), ..Default::default() };
+        assert!(stdio.add_args().unwrap_err().contains("remote"));
+        assert!(!stdio.takes_client_secret());
+        let clash = McpSpec { name: "a".into(), kind: "remote".into(), url: "https://x".into(), headers: vec!["X-Key: ${client_secret}".into()], ..Default::default() };
+        assert!(clash.add_args().unwrap_err().contains("client secret"));
+    }
+
+    #[test]
+    fn sbx_asking_for_a_client_id_gets_a_hint_only_when_none_was_given() {
+        let said = r#"error: server "github" advertises no registration endpoint (no dynamic client registration); --client-id is required to register it"#;
+        let none = McpSpec { name: "github".into(), kind: "remote".into(), url: "https://x".into(), ..Default::default() };
+        assert!(add_error_hint(&none, said).unwrap().contains("OAuth client ID"));
+        assert!(add_error_hint(&McpSpec { client_id: "abc".into(), ..none.clone() }, said).is_none());
+        assert!(add_error_hint(&none, "error: something else").is_none());
     }
 }
