@@ -822,7 +822,7 @@ impl App {
         }
         match allowed {
             Ok(()) => {}
-            Err(e) if kits::policy_is_governed(&format!("{e:#}")) => {
+            Err(e) if kits::policy_is_governed(&sbxw_sbx::sbx_said(&e)) => {
                 run.warn(format!("network allowlist not applied — your organization manages this policy:\n{e:#}"))
             }
             Err(e) if cfg.network_allow.is_empty() => run.warn(format!("could not allow {allow} egress: {e:#}")),
@@ -831,7 +831,7 @@ impl App {
         if !cfg.network_deny.is_empty() {
             match clock.time(step::POLICY_DENY, sbx.policy("deny", Some(n), &cfg.network_deny.join(","))).await {
                 Ok(()) => {}
-                Err(e) if kits::policy_is_governed(&format!("{e:#}")) => {
+                Err(e) if kits::policy_is_governed(&sbxw_sbx::sbx_said(&e)) => {
                     run.warn(format!("network denylist not applied — your organization manages this policy:\n{e:#}"))
                 }
                 Err(e) => return Err(e).context("failed to apply the network denylist"),
@@ -894,7 +894,7 @@ impl App {
                     }
                     // sbx asks a person to approve the network rules the kit
                     // adds, and has no flag to: hand them the command.
-                    Err(e) if kits::add_needs_approval(&format!("{e:#}")) => {
+                    Err(e) if kits::add_needs_approval(&sbxw_sbx::sbx_said(&e)) => {
                         {
                             let mut waiting = self.kit_approvals.lock().unwrap();
                             let list = waiting.entry(name.clone()).or_default();
@@ -907,7 +907,7 @@ impl App {
                              press ✓ on '{name}' in the sidebar to answer in a pane, or run `sbx kit add {n} {kit}` in a terminal.\n{e:#}"
                         ))
                     }
-                    Err(e) if kits::add_needs_recreate(&format!("{e:#}")) => {
+                    Err(e) if kits::add_needs_recreate(&sbxw_sbx::sbx_said(&e)) => {
                         refused.push(refusal(kit));
                         run.warn(format!(
                             "`sbx kit add` cannot apply kit '{kit}' to an existing sandbox — '{name}' is \

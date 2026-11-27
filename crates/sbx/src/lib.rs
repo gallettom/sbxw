@@ -89,21 +89,198 @@ pub const EXEC_NOT_RUN: i32 = 125;
 /// policy denials carry a multi-line explanation and an org support message.
 const STDERR_TAIL_LIMIT: usize = 2000;
 
-/// A failed invocation as an error with the tail of sbx's stderr: sbx prints
-/// context first, the reason last.
-pub fn command_error(args: &[String], out: &Output) -> anyhow::Error {
-    let shown = args[..args.len().min(4)].join(" ");
-    let status = out.code.map_or_else(|| "a signal".to_string(), |c| format!("exit status {c}"));
-    let msg = String::from_utf8_lossy(&out.stderr);
-    let msg = msg.trim();
-    if msg.is_empty() {
-        return anyhow!("`sbx {shown}` exited with {status}");
+/// Longest run of what follows `--` (an inner command, a script, a prompt)
+/// shown in [`display_command`], in characters.
+const INNER_SHOWN_LIMIT: usize = 80;
+
+/// Longest command line [`display_command`] renders, in characters.
+const COMMAND_SHOWN_LIMIT: usize = 600;
+
+/// `sbx`'s argv as a person reads it in an error: every argument, in order,
+/// quoted so the line can be pasted into a shell, with nothing shown that
+/// must not be. What the arguments sbxw builds can carry:
+///
+/// * `-e K=V`, `--env K=V`, `--env-arg K=V` (`create`, `run`, `env create`):
+///   a value can be a token. The name stays, the value is `…`
+///   (`-e TOKEN=…`). `--env NAME` with no `=` (`secret set-custom`) names a
+///   variable and stays whole.
+/// * whatever follows `--` (`exec`, `run`): an inner command, a script or a
+///   prompt, kept to [`INNER_SHOWN_LIMIT`] characters, then `…`.
+/// * `--header=Name: value` or `--header 'Name: value'` (`mcp add`): meant to hold `${key}` templates
+///   whose values are in sbx's secret store, shown whole; but nothing makes a
+///   person write a template, so a value with no `${` is shown as `Name: …`.
+/// * `secret set|set-custom`: the value goes on stdin, never argv; the
+///   service (`mcp:<server>:<key>`), `--host`, and `--command` (the host
+///   command sbx runs to read the secret) are fine to show.
+/// * paths, names, URLs, client ids, policy resources and `--query K=V`
+///   matches: fine to show.
+///
+/// The whole line is bounded to [`COMMAND_SHOWN_LIMIT`] characters, `…` at
+/// the cut. A control or invisible formatting character is written out
+/// (`$'a\nb'`), never emitted.
+pub fn display_command(args: &[String]) -> String {
+    let mut words: Vec<String> = Vec::with_capacity(args.len());
+    let mut inner: Option<Vec<String>> = None;
+    // The flag whose value is the next argument.
+    let mut value_of: Option<&str> = None;
+    for a in args {
+        if let Some(inner) = inner.as_mut() {
+            inner.push(shell_word(a));
+            continue;
+        }
+        if let Some(flag) = value_of.take() {
+            let masked = if flag == "--header" { mask_header(a) } else { mask_assignment(a) };
+            words.push(shell_word(&masked));
+            continue;
+        }
+        if a == "--" {
+            words.push("--".into());
+            inner = Some(Vec::new());
+            continue;
+        }
+        if let flag @ ("-e" | "--env" | "--env-arg" | "--header") = a.as_str() {
+            value_of = Some(flag);
+            words.push(a.clone());
+            continue;
+        }
+        let shown = match a.split_once('=') {
+            Some((flag @ ("-e" | "--env" | "--env-arg"), v)) => format!("{flag}={}", shell_word(&mask_assignment(v))),
+            Some(("--header", h)) => format!("--header={}", shell_word(&mask_header(h))),
+            Some((flag, v)) if flag.starts_with("--") && flag.len() > 2 && is_plain(flag) => format!("{flag}={}", shell_word(v)),
+            _ => shell_word(a),
+        };
+        words.push(shown);
     }
-    let tail = match msg.char_indices().nth_back(STDERR_TAIL_LIMIT) {
-        Some((i, _)) => format!("…{}", &msg[i..]),
-        None => msg.to_string(),
-    };
-    anyhow!("`sbx {shown}` exited with {status}:\n{tail}")
+    if let Some(inner) = inner.filter(|i| !i.is_empty()) {
+        words.push(cut(&inner.join(" "), INNER_SHOWN_LIMIT));
+    }
+    cut(&words.join(" "), COMMAND_SHOWN_LIMIT)
+}
+
+/// `K=V` as `K=…`; a bare `K` (no value given here) as it is.
+fn mask_assignment(a: &str) -> String {
+    match a.split_once('=') {
+        Some((k, _)) => format!("{k}=…"),
+        None => a.to_string(),
+    }
+}
+
+/// `Name: value`, the value shown only when it is a `${key}` template.
+fn mask_header(h: &str) -> String {
+    match h.split_once(':') {
+        Some((_, v)) if v.contains("${") => h.to_string(),
+        Some((name, _)) => format!("{name}: …"),
+        None => "…".into(),
+    }
+}
+
+/// At most `limit` characters of `s`, `…` in place of the rest.
+fn cut(s: &str, limit: usize) -> String {
+    match s.char_indices().nth(limit) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
+/// Characters a shell takes literally in a bare word (and `…`, sbxw's own
+/// mark of a hidden value).
+fn is_plain(s: &str) -> bool {
+    !s.is_empty() && !s.starts_with('~') && s.chars().all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-…".contains(c))
+}
+
+/// Characters never emitted as they are: controls, and the invisible ones
+/// that reorder or hide text (bidi overrides, zero-width marks).
+fn is_hidden(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}')
+}
+
+/// One argument as a shell word: bare when plain, else in single quotes
+/// (`'it'\''s'`), else, with a hidden character in it, `$'…'` with escapes.
+fn shell_word(s: &str) -> String {
+    if is_plain(s) {
+        return s.to_string();
+    }
+    if !s.chars().any(is_hidden) {
+        return format!("'{}'", s.replace('\'', r"'\''"));
+    }
+    let mut out = String::from("$'");
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str(r"\n"),
+            '\t' => out.push_str(r"\t"),
+            '\r' => out.push_str(r"\r"),
+            '\\' => out.push_str(r"\\"),
+            '\'' => out.push_str(r"\'"),
+            c if is_hidden(c) && (c as u32) < 0x80 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if is_hidden(c) => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// A failed invocation as an error with the tail of sbx's stderr: sbx prints
+/// context first, the reason last. The command is shown whole, as
+/// [`display_command`] renders it. Code that decides from the failure reads
+/// [`sbx_said`], never this text: the argv carries names a person chose.
+pub fn command_error(args: &[String], out: &Output) -> anyhow::Error {
+    anyhow::Error::new(CommandFailed::new(args, out))
+}
+
+/// What [`command_error`] holds: the command as shown, and sbx's own words.
+struct CommandFailed {
+    shown: String,
+    /// `exited with exit status N` (or `a signal`), then the tail of stderr.
+    said: String,
+}
+
+impl CommandFailed {
+    fn new(args: &[String], out: &Output) -> Self {
+        let status = out.code.map_or_else(|| "a signal".to_string(), |c| format!("exit status {c}"));
+        let msg = String::from_utf8_lossy(&out.stderr);
+        let msg = msg.trim();
+        let said = if msg.is_empty() {
+            format!("exited with {status}")
+        } else {
+            let tail = match msg.char_indices().nth_back(STDERR_TAIL_LIMIT) {
+                Some((i, _)) => format!("…{}", &msg[i..]),
+                None => msg.to_string(),
+            };
+            format!("exited with {status}:\n{tail}")
+        };
+        Self { shown: display_command(args), said }
+    }
+}
+
+impl std::fmt::Display for CommandFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`sbx {}` {}", self.shown, self.said)
+    }
+}
+
+impl std::fmt::Debug for CommandFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::error::Error for CommandFailed {}
+
+/// sbx's own words in a failure, for code that matches them (a confirmation
+/// asked for, a governed policy, a kit that needs a terminal): the status and
+/// the tail of stderr of the [`command_error`] or [`SbxFailure`] inside `e`,
+/// without the command line, whose names (a sandbox called `confirm`, a
+/// template `stop-me`) would otherwise match too. An error sbx did not make
+/// is its whole text.
+pub fn sbx_said(e: &anyhow::Error) -> String {
+    e.chain()
+        .find_map(|c| {
+            c.downcast_ref::<CommandFailed>()
+                .map(|f| f.said.clone())
+                .or_else(|| c.downcast_ref::<SbxFailure>().map(|f| f.said.clone()))
+        })
+        .unwrap_or_else(|| format!("{e:#}"))
 }
 
 /// A failed `sbx create` or `sbx kit add`, kept whole for whoever can do
@@ -115,6 +292,9 @@ pub fn command_error(args: &[String], out: &Output) -> anyhow::Error {
 pub struct SbxFailure {
     pub message: String,
     pub denied: Vec<String>,
+    /// What [`sbx_said`] reads: the message without the command line.
+    #[serde(skip)]
+    said: String,
 }
 
 impl std::fmt::Display for SbxFailure {
@@ -128,7 +308,8 @@ impl std::error::Error for SbxFailure {}
 impl SbxFailure {
     pub fn new(args: &[String], out: &Output) -> Self {
         let said = format!("{}\n{}", out.stdout_str(), String::from_utf8_lossy(&out.stderr));
-        Self { message: format!("{:#}", command_error(args, out)), denied: denied_hosts(&said) }
+        let failed = CommandFailed::new(args, out);
+        Self { message: failed.to_string(), denied: denied_hosts(&said), said: failed.said }
     }
 }
 
@@ -1264,7 +1445,7 @@ impl Sbx {
         let Err(first) = self.checked(Invocation::new(s(&["mcp", "rm", server]))).await else {
             return Ok(());
         };
-        if !wants_confirmation(&format!("{first:#}")) {
+        if !wants_confirmation(&sbx_said(&first)) {
             return Err(first);
         }
         self.checked(Invocation::new(s(&["mcp", "rm", server, "--force"]))).await.map(drop)
@@ -1302,7 +1483,7 @@ impl Sbx {
         let Err(first) = self.checked(Invocation::new(args.clone())).await else {
             return Ok(false);
         };
-        let said = format!("{first:#}").to_lowercase();
+        let said = sbx_said(&first).to_lowercase();
         if !(wants_confirmation(&said) || said.contains("stop") || said.contains("running")) {
             return Err(first);
         }
@@ -1329,7 +1510,7 @@ impl Sbx {
         let Err(first) = self.checked(Invocation::new(s(&["template", "rm", tag]))).await else {
             return Ok(());
         };
-        if !wants_confirmation(&format!("{first:#}")) {
+        if !wants_confirmation(&sbx_said(&first)) {
             return Err(first);
         }
         self.checked(Invocation::new(s(&["template", "rm", tag, "--force"]))).await.map(drop)
@@ -1352,7 +1533,7 @@ impl Sbx {
         let Err(first) = self.checked(inv(secret_args(service, sandbox))).await else {
             return Ok(());
         };
-        if !wants_confirmation(&format!("{first:#}")) {
+        if !wants_confirmation(&sbx_said(&first)) {
             return Err(first);
         }
         let mut forced = secret_args(service, sandbox);
@@ -1371,7 +1552,7 @@ impl Sbx {
         let Err(first) = self.checked(Invocation::new(args.clone())).await else {
             return Ok(());
         };
-        if !wants_confirmation(&format!("{first:#}")) {
+        if !wants_confirmation(&sbx_said(&first)) {
             return Err(first);
         }
         let mut forced = args;
@@ -1682,7 +1863,7 @@ pub fn interactive(args: &[String]) -> Result<()> {
         .status()
         .map_err(|e| anyhow!("failed to spawn `sbx` — is it on your PATH? ({e})"))?;
     if !status.success() {
-        bail!("`sbx {}` exited with {status}", args[..args.len().min(3)].join(" "));
+        bail!("`sbx {}` exited with {status}", display_command(args));
     }
     Ok(())
 }
@@ -2358,5 +2539,91 @@ mod tests {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
         assert_eq!(rec.count_since("ls", 0), 1);
+    }
+
+    #[test]
+    fn an_mcp_add_is_shown_whole_with_its_headers_quoted() {
+        let a = s(&[
+            "mcp", "add", "github", "--url=https://api.githubcopilot.com/mcp",
+            "--header=Authorization: Bearer ${api-key}", "--header=X-Org: ${org}",
+            "--client-id=Iv1.abc", "--skip-auth",
+        ]);
+        assert_eq!(
+            display_command(&a),
+            "mcp add github --url=https://api.githubcopilot.com/mcp --header='Authorization: Bearer ${api-key}' \
+             --header='X-Org: ${org}' --client-id=Iv1.abc --skip-auth"
+        );
+    }
+
+    #[test]
+    fn a_header_that_is_not_a_template_shows_its_name_only() {
+        let a = s(&["mcp", "add", "x", "--header=Authorization: Bearer ghp_literal", "--header", "X-Key: sk-1", "--header", "X-T: ${t}"]);
+        let shown = display_command(&a);
+        assert_eq!(shown, "mcp add x --header='Authorization: …' --header 'X-Key: …' --header 'X-T: ${t}'");
+        assert!(!shown.contains("ghp_literal") && !shown.contains("sk-1"), "{shown}");
+    }
+
+    #[test]
+    fn an_environment_value_is_hidden_and_the_inner_command_bounded() {
+        let script = "x".repeat(200);
+        let a = s(&["exec", "-e", "TOKEN=sk-123", "--env=K=v2", "--env-arg", "p=s3", "-it", "n", "--", "node", "-e", &script]);
+        let shown = display_command(&a);
+        assert!(shown.starts_with("exec -e TOKEN=… --env=K=… --env-arg p=… -it n -- node -e xxx"), "{shown}");
+        assert!(!shown.contains("sk-123") && !shown.contains("v2") && !shown.contains("s3"), "{shown}");
+        let inner = shown.split_once(" -- ").unwrap().1;
+        assert_eq!(inner.chars().count(), INNER_SHOWN_LIMIT + 1, "{inner}");
+        assert!(inner.ends_with('…'));
+        // A name with no value (`secret set-custom --env API_KEY`) stays.
+        assert_eq!(display_command(&s(&["secret", "set-custom", "--env", "API_KEY", "--value-stdin"])), "secret set-custom --env API_KEY --value-stdin");
+        // `run`'s agent flags after `--` are shown, being short.
+        assert_eq!(display_command(&attach_args(&sb("n"), &["A=1".into()], &[], "", &["--chrome"])), "run --name n -e A=… -- --chrome");
+    }
+
+    #[test]
+    fn a_very_long_command_is_bounded_on_a_character() {
+        let long: Vec<String> = (0..400).map(|i| format!("é{i}")).collect();
+        let shown = display_command(&long);
+        assert_eq!(shown.chars().count(), COMMAND_SHOWN_LIMIT + 1);
+        assert!(shown.ends_with('…') && shown.starts_with("'é0' 'é1' 'é2'"), "{shown}");
+    }
+
+    #[test]
+    fn quotes_and_control_characters_are_rendered_safely() {
+        assert_eq!(display_command(&s(&["template", "save", "n", "it's"])), r"template save n 'it'\''s'");
+        assert_eq!(display_command(&s(&["create", "claude", "/a b", "--name", "n", ""])), "create claude '/a b' --name n ''");
+        assert_eq!(display_command(&s(&["policy", "ls", "a;rm -rf ~", "$HOME", "`x`"])), "policy ls 'a;rm -rf ~' '$HOME' '`x`'");
+        let shown = display_command(&s(&["kit", "add", "n", "a\nb\x1b[31m'\u{202e}"]));
+        assert_eq!(shown, r"kit add n $'a\nb\x1b[31m\'\u202e'");
+        assert!(!shown.chars().any(is_hidden), "{shown:?}");
+        assert_eq!(display_command(&s(&["create", "--mount", "~/x:/x"])), "create --mount '~/x:/x'");
+    }
+
+    #[test]
+    fn the_error_names_the_whole_command_and_classifiers_read_sbx_alone() {
+        let a = s(&["mcp", "add", "confirm", "--url=https://h/mcp", "--client-id=id", "--skip-auth", "--force"]);
+        let e = command_error(&a, &Output::fail(1, "boom"));
+        assert_eq!(format!("{e:#}"), "`sbx mcp add confirm --url=https://h/mcp --client-id=id --skip-auth --force` exited with exit status 1:\nboom");
+        let e = e.context("adding 'confirm'");
+        assert_eq!(sbx_said(&e), "exited with exit status 1:\nboom");
+        assert!(!wants_confirmation(&sbx_said(&e)));
+        let quiet = command_error(&s(&["ls"]), &Output { code: None, stdout: vec![], stderr: vec![] });
+        assert_eq!(format!("{quiet:#}"), "`sbx ls` exited with a signal");
+        assert_eq!(sbx_said(&anyhow!("not sbx's")), "not sbx's");
+    }
+
+    #[tokio::test]
+    async fn a_name_that_reads_like_a_prompt_is_not_one() {
+        // A sandbox `running`, a template `stop-me`, a server and a secret
+        // service `confirm`: their names are in argv, not in what sbx said.
+        let fake = Fake::new(|_| Output::fail(1, "disk full"));
+        let sbx = Sbx::new(fake.clone());
+        assert!(sbx.template_save(&sb("running"), "stop-me").await.is_err());
+        assert!(sbx.template_rm("confirm-force").await.is_err());
+        assert!(sbx.mcp_rm("confirm").await.is_err());
+        assert!(sbx.secret_set("confirm", "v", Some(&sb("not-a-terminal"))).await.is_err());
+        assert!(sbx.secret_set_command("confirm", "gh auth token --force").await.is_err());
+        let log = fake.log();
+        assert_eq!(log.len(), 5, "no retry, no stop: {log:?}");
+        assert!(log.iter().all(|l| !l.starts_with("stop")), "{log:?}");
     }
 }
