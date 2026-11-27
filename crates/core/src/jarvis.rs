@@ -2380,7 +2380,7 @@ mod tests {
         for bad in [json!(["Authorization: Bearer abc123"]), json!(["X-Api-Key: whatever"]), json!(["Cookie: sid=zzz"])] {
             let e = plan(&w, &[spec(bad.clone())]).unwrap_err();
             let h = bad[0].as_str().unwrap();
-            assert_eq!(e, crate::mcp::header_refusal(h).unwrap(), "the dialogs' words: {bad}");
+            assert_eq!(e, format!("change 1 (mcp_server): {}", crate::mcp::header_refusal(h).unwrap()), "the dialogs' words: {bad}");
             assert!(e.contains("carries a credential") && !e.contains(h.split_once(':').unwrap().1.trim()), "{bad}: {e}");
         }
         for bad in [json!(["X-Thing: sk-ant-api03-AbCdEf1234567890"]), json!(["Authorization: Bearer ${k} abc123"])] {
