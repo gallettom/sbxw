@@ -654,6 +654,12 @@ fn check_text(what: &str, text: &str, max: usize) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // Secrets in MCP specs
 
+/// Header names whose value is a credential whatever it looks like.
+fn credential_header(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    ["authorization", "cookie"].contains(&n.as_str()) || ["token", "secret", "key", "password", "auth"].iter().any(|w| n.contains(w))
+}
+
 /// Does `text` hold something shaped like a key or a token? The same shapes
 /// the concierge masks before sending text out ([`anonymise`]'s `secret`).
 fn looks_secret(text: &str) -> bool {
@@ -686,7 +692,7 @@ fn check_mcp_secrets(spec: &McpServerSpec) -> Result<(), String> {
         let (name, value) = h.split_once(':').unwrap_or((h.as_str(), ""));
         let literal = without_placeholders(value);
         let scheme_only = literal.split_whitespace().all(|w| ["bearer", "basic", "token"].contains(&w.to_ascii_lowercase().as_str()));
-        if (crate::mcp::credential_header(name) && !scheme_only) || looks_secret(&literal) {
+        if (credential_header(name) && !scheme_only) || looks_secret(&literal) {
             return Err(format!("header '{}' carries a literal credential. {SECRET_REFUSAL}", name.trim()));
         }
     }
@@ -1126,13 +1132,14 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             })
         }
         Change::McpServer { spec } => {
-            let s = spec.to_spec();
-            // The core's refusal first, in its words (a credential header
-            // without a placeholder), as the MCP dialogs say it; then
-            // Jarvis's stricter one (no literal beside the placeholder, no
-            // key-shaped text anywhere).
-            let args = s.add_args()?;
+            // The core's refusal first, in the MCP dialogs' words; then
+            // Jarvis's own, stricter.
+            if let Some(why) = spec.headers.iter().find_map(|h| crate::mcp::header_refusal(h)) {
+                return Err(why);
+            }
             check_mcp_secrets(spec)?;
+            let s = spec.to_spec();
+            let args = s.add_args()?;
             let name = crate::mcp::check_name(&s.name)?;
             let servers = w.mcp.as_mut().ok_or("the MCP servers could not be listed")?;
             let replace = servers.contains(&name);
@@ -2387,6 +2394,15 @@ mod tests {
             let e = plan(&w, &[spec(bad.clone())]).unwrap_err();
             assert!(e.contains("MCP dialog"), "{bad}: {e}");
         }
+        // Jarvis stays stricter than the forms: what it refused before the
+        // core's rule, it still refuses, in its own words where the core lets
+        // the name go.
+        for h in ["X-Key: literal", "Idempotency-Key: 1", "X-Author: someone", "X-Keyboard-Layout: fr", "X-Secrets: abc", "Mcp-Session-Id: sk-ant-api03-AbCdEf1234567890", "X-Api-Key: ${k} abc"] {
+            let e = plan(&w, &[spec(json!([h]))]).unwrap_err();
+            assert!(e.contains("MCP dialog"), "{h}: {e}");
+            assert!(crate::mcp::header_refusal(h).is_none(), "the forms let it go: {h}");
+        }
+        assert!(plan(&w, &[spec(json!(["Idempotency-Key: ${k}", "Accept: application/json", "Mcp-Session-Id: abc"]))]).is_ok());
         let ok = plan(&w, &[spec(json!(["Authorization: Bearer ${api-key}", "Accept: application/json"]))]).unwrap();
         assert!(ok[0].view.diff.contains("+ sbx mcp add acme --url=https://mcp.acme.com/mcp") && ok[0].view.diff.contains("${api-key}"), "{}", ok[0].view.diff);
         let replace = plan(&w, &[change(json!({"kind": "mcp_server", "spec": {"name": "github", "kind": "remote", "url": "https://x"}}))]).unwrap();
