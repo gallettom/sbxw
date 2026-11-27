@@ -612,6 +612,198 @@ pub fn merge_rows(plan: &J) -> (Vec<J>, String) {
     (rows, outcome)
 }
 
+// ---------------------------------------------------------------------------
+// The merge's status, as the daemon words it (`merge_status`, crates/core/src/plans/ci.rs)
+
+fn short(c: &str) -> String {
+    c.chars().take(7).collect()
+}
+
+/// A badge tone for a merge state: the only thing read from the state
+/// itself, the words are the daemon's.
+fn merge_tone(state: &str) -> &'static str {
+    match state {
+        "merged" | "merged_ci" | "proposed" => "green",
+        "failed" | "ci_failed" => "red",
+        "ci_stale" => "amber",
+        "merging" | "ci_building" | "ci_testing" => "blue",
+        _ => "neutral",
+    }
+}
+
+/// A test outcome in words (`Outcome::word`, crates/core/src/testq.rs).
+fn outcome_word(o: &str) -> &str {
+    match o {
+        "passed" => "passed",
+        "failed" => "failed",
+        "timed_out" => "timed out",
+        "error" => "could not run",
+        o => o,
+    }
+}
+
+fn duration(ms: u64) -> String {
+    let s = ms / 1000;
+    match s {
+        0..=59 => format!("{s} s"),
+        _ => format!("{} min {} s", s / 60, s % 60),
+    }
+}
+
+/// The lines of a test tail the dialog shows (the daemon bounds it too).
+pub const TAIL_LINES: usize = 30;
+
+fn last_lines(s: &str, n: usize) -> String {
+    let lines: Vec<&str> = s.trim_end().lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+/// The states a merge is still to be done in: what the pane banner shows.
+pub const MERGE_LIVE: [&str; 8] = ["proposed", "merging", "failed", "ci_building", "ci_testing", "merged_ci", "ci_stale", "ci_failed"];
+
+/// The states the daemon lets the person abandon (`PlanBook::abandon_merge`).
+pub fn abandonable(state: &str) -> bool {
+    matches!(state, "proposed" | "failed" | "ci_testing" | "merged_ci" | "ci_stale" | "ci_failed")
+}
+
+/// What a screen draws of a plan's merge: the daemon's `merge_status` as it
+/// is (`word`, `detail`, `can_merge`, `why_not`, `ci`, `no_ci_because`), its
+/// state's tone, the Merge button's label, and the CI run's facts in rows
+/// (`merge.ci`). `None`: no merge, or a daemon that sends no `merge_status`
+/// (the dialog then draws the per-thread view alone).
+pub fn merge_view(plan: &J) -> Option<J> {
+    let m = &plan["merge"];
+    let st = &plan["merge_status"];
+    let state = m["state"].as_str()?;
+    let word = st["word"].as_str()?;
+    let can = st["can_merge"] == true;
+    let ci = &m["ci"];
+    let is_ci = st["ci"] == true && ci.is_object();
+    let label = match state {
+        "merging" => "Merging…",
+        "failed" => "Retry merge",
+        _ if is_ci => "Merge to main",
+        _ => "Merge all",
+    };
+    let mut v = json!({
+        "state": state, "word": word, "detail": st["detail"].as_str().unwrap_or(""), "can_merge": can,
+        "why_not": st["why_not"].as_str().filter(|w| !w.is_empty()), "ci": is_ci,
+        "no_ci_because": st["no_ci_because"].as_str().filter(|w| !w.is_empty()),
+        "tone": merge_tone(state), "button": label, "abandonable": abandonable(state),
+    });
+    if !is_ci {
+        return Some(v);
+    }
+    let branch = ci["branch"].as_str().unwrap_or("");
+    let base_branch = ci["base_branch"].as_str().or(m["base"].as_str()).unwrap_or("main");
+    let mut facts = vec![json!({ "k": "branch", "label": "CI branch", "text": branch, "mono": true })];
+    if let Some(b) = ci["base"].as_str() {
+        facts.push(json!({ "k": "base", "label": "Built on", "text": format!("{base_branch} at {}", short(b)), "mono": true }));
+    }
+    if let Some(t) = ci["tip"].as_str() {
+        facts.push(json!({ "k": "tip", "label": "Tip", "text": short(t), "mono": true }));
+    }
+    let builds = ci["builds"].as_u64().unwrap_or(1);
+    let mut b = if builds == 1 { "1 build".to_string() } else { format!("{builds} builds") };
+    if let Some(r) = ci["rebuilt_because"].as_str().filter(|r| !r.is_empty()) {
+        b += &format!(", rebuilt because {r}");
+    }
+    facts.push(json!({ "k": "builds", "label": "Builds", "text": b, "mono": false }));
+    if let Some(r) = ci["stale_because"].as_str().filter(|r| !r.is_empty()) {
+        facts.push(json!({ "k": "stale", "label": "Waits because", "text": r, "mono": false }));
+    }
+    let mut threads: Vec<J> = ci["merged"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|s| {
+            let t = s["thread"].as_str().unwrap_or("?");
+            json!({ "name": t, "text": format!("merged at {}", short(s["commit"].as_str().unwrap_or(""))), "tone": "green", "mark": "✓" })
+        })
+        .collect();
+    threads.extend(ci["skipped"].as_array().into_iter().flatten().map(|k| json!({ "name": k["thread"].as_str().unwrap_or("?"), "text": format!("nothing to merge: {}", k["why"].as_str().unwrap_or("")), "tone": "text-muted", "mark": "–" })));
+    v["threads"] = J::Array(threads);
+    let failed = state == "ci_failed";
+    let t = &ci["tests"];
+    if t.is_object() {
+        let attempts: Vec<&J> = t["attempts"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+        let mut line = format!("Tests {} on {}", outcome_word(t["outcome"].as_str().unwrap_or("")), short(t["commit"].as_str().unwrap_or("")));
+        if t["reused"] == true {
+            line += ", a stored result for the same tree";
+        }
+        line += &format!(", {}", if attempts.len() == 1 { "1 attempt".to_string() } else { format!("{} attempts", attempts.len()) });
+        v["tests"] = json!(line);
+        v["tests_tone"] = json!(if t["outcome"] == "passed" { "green" } else { "red" });
+        let rows: Vec<J> = attempts
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let o = a["outcome"].as_str().unwrap_or("");
+                let tail = last_lines(a["tail"].as_str().filter(|_| failed || o != "passed").unwrap_or(""), TAIL_LINES);
+                json!({ "line": format!("Attempt {}: {}, {}", i + 1, outcome_word(o), duration(a["duration_ms"].as_u64().unwrap_or(0))), "tail": tail, "tone": if o == "passed" { "green" } else { "red" } })
+            })
+            .collect();
+        v["attempts"] = J::Array(rows);
+    } else if let Some(j) = ci["job"].as_str().filter(|_| state == "ci_testing") {
+        v["tests"] = json!(format!("Test job {j} queued or running"));
+        v["tests_tone"] = json!("blue");
+    }
+    let f = &ci["failure"];
+    if failed && f.is_object() {
+        let kind = f["kind"].as_str().unwrap_or("");
+        let files: Vec<&str> = f["files"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
+        let line = match kind {
+            "conflict" => format!("sbxw/{} conflicts while {branch} was built", f["thread"].as_str().unwrap_or("?")),
+            "tests" => format!("The tests {} on {branch}", f["text"].as_str().unwrap_or("failed")),
+            _ => format!("{branch} could not be built: {}", f["text"].as_str().unwrap_or("")),
+        };
+        v["failure"] = json!({ "kind": kind, "line": line, "thread": f["thread"], "files": files, "text": f["text"].as_str().unwrap_or("") });
+    }
+    if let Some(c) = ci["click_refused"].as_str().filter(|c| !c.is_empty()) {
+        v["click_refused"] = json!(format!("The last Merge was refused: {c}"));
+    }
+    if state == "merged_ci" {
+        if let Some(tip) = ci["tip"].as_str() {
+            v["ff"] = json!(format!("Merge fast-forwards {base_branch} to {}, the tip of {branch} the tests passed on. Nothing is merged again.", short(tip)));
+        }
+    }
+    v["facts"] = J::Array(facts);
+    Some(v)
+}
+
+/// The pane banner's one line on a plan's merge: `{plan, state, word,
+/// detail, can_merge, tone, button}`. The daemon's words when it sends
+/// `merge_status`; from an older daemon, the words the banner had.
+pub fn merge_line(plan: &J) -> Option<J> {
+    let state = plan["merge"]["state"].as_str()?;
+    if !MERGE_LIVE.contains(&state) {
+        return None;
+    }
+    let (word, detail, can, button) = match merge_view(plan) {
+        Some(v) => {
+            let b = if state == "failed" { "Retry merge" } else { "Merge…" };
+            (v["word"].as_str().unwrap_or("").to_string(), v["detail"].as_str().unwrap_or("").to_string(), v["can_merge"] == true, b)
+        }
+        None => match state {
+            "merging" => ("Merging".into(), "Merging the threads…".into(), false, "Merge…"),
+            "failed" => ("Merge failed".into(), "The merge stopped".into(), true, "Retry merge"),
+            "proposed" => ("Merge proposed".into(), "The lead proposes merging its threads".into(), true, "Merge…"),
+            _ => return None,
+        },
+    };
+    Some(json!({ "plan": plan["id"], "state": state, "word": word, "detail": detail, "can_merge": can, "tone": merge_tone(state), "button": button }))
+}
+
+/// The plan of `sandbox` whose merge the pane banner shows: the latest one
+/// not closed with a merge still to be done, CI states included.
+pub fn live_merge_plan<'a>(data: &'a J, sandbox: &str) -> Option<&'a J> {
+    data["plans"]
+        .as_array()?
+        .iter()
+        .filter(|p| p["sandbox"] == sandbox && p["closed"] != true && MERGE_LIVE.contains(&p["merge"]["state"].as_str().unwrap_or("")))
+        .max_by_key(|p| p["created_ms"].as_u64().unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests {
     /// The table the web client's tests use too (`tests/js/name-cases.json`).

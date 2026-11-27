@@ -308,6 +308,8 @@ fn the_merge_dialog_shows_the_leads_order_and_note_and_a_claimed_file_holds_it()
 fn plan_screen(data: &J, id: &str) -> (crate::luau::LuauHost, crate::luau::Node) {
     let mut d = data.clone();
     d["app"]["modal"] = json!({ "screen": "plans", "arg": id });
+    // What the core sets beside the daemon's answers.
+    d[VIEW] = view(&Ctx { data: &d });
     let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
     h.load("plans", include_str!("../../../screens/plans.luau")).unwrap();
     let tree = h.render(&d).unwrap();
@@ -597,6 +599,25 @@ fn abandon_merge_is_offered_when_proposed_or_failed_and_asks_the_core_dialog() {
             assert!(find_key(&tree, "merge-later").is_some(), "beside Not now");
         }
     }
+    // With the daemon's merge_status: the button follows the merge view's
+    // `abandonable` (the model's), CI states included; the screen keeps no list.
+    let mut cases: Vec<J> = ["proposed", "failed", "merging", "merged", "abandoned"]
+        .iter()
+        .map(|s| {
+            let mut d = merge_in(s);
+            d["plans"][0]["merge_status"] = standin::merge_status(&d["plans"][0]["merge"]);
+            d
+        })
+        .collect();
+    cases.extend(CI_FIXTURES.iter().map(|(n, _)| fixture(n)));
+    for d in &cases {
+        let state = d["plans"][0]["merge"]["state"].as_str().unwrap().to_string();
+        let flag = view(&Ctx { data: d })["web-app"]["merges"]["p-1"]["abandonable"].clone();
+        assert_eq!(flag, json!(model::abandonable(&state)), "{state}: the view carries the model's word");
+        let (_, tree) = plan_screen(d, "p-1");
+        let todo = !matches!(state.as_str(), "merged" | "abandoned");
+        assert_eq!(find_key(&tree, "merge-abandon").is_some(), todo && flag == true, "{state}: drawn from the flag");
+    }
     assert!(matches!(spec("plan_merge_abandon").risk, Risk::Approval(_)));
     let mut data = merge_in("failed");
     data["app"]["modal"] = json!({ "screen": "plans", "arg": "p-1" });
@@ -858,4 +879,369 @@ fn a_plan_without_a_test_command_draws_no_tests_row() {
     let conf = (p.build)(&Ctx { data: &d }, &p.asked, &json!({ "ok": true, "open": 0, "max": 9, "threads": [] })).unwrap();
     assert!(conf.call.body.get("clear_tests").is_none());
     assert!(!conf.lines.iter().any(|l| l.starts_with("Tests:")));
+}
+
+// ---------------------------------------------------------------------------
+// CI merges: the daemon's `merge_status` and `merge.ci`, drawn as they are
+
+/// Every CI fixture, and the state its merge is in.
+const CI_FIXTURES: [(&str, &str); 8] = [
+    ("ci-building", "ci_building"),
+    ("ci-testing", "ci_testing"),
+    ("ci-merged", "merged_ci"),
+    ("ci-refused", "merged_ci"),
+    ("ci-stale", "ci_stale"),
+    ("ci-failed-conflict", "ci_failed"),
+    ("ci-failed-tests", "ci_failed"),
+    ("ci-merged-main", "merged"),
+];
+
+fn texts(n: &crate::luau::Node, out: &mut Vec<String>) {
+    if !n.text.is_empty() {
+        out.push(n.text.clone());
+    }
+    if let Some(h) = &n.help {
+        out.push(h.clone());
+    }
+    n.children.iter().for_each(|c| texts(c, out));
+}
+
+fn controls(n: &crate::luau::Node) -> usize {
+    use crate::luau::Kind::*;
+    let me = matches!(n.kind, Button | Input | Select | Checkbox | Menu | Textarea) as usize;
+    me + n.children.iter().map(controls).sum::<usize>()
+}
+
+#[test]
+fn the_fixtures_carry_the_status_the_standin_computes() {
+    for (name, state) in CI_FIXTURES.iter().chain(&[("merge-no-ci", "proposed")]) {
+        let p = &fixture(name)["plans"][0];
+        assert_eq!(p["merge"]["state"], *state, "{name}");
+        let mut want = standin::merge_status(&p["merge"]);
+        if let Some(n) = p["merge_status"]["no_ci_because"].as_str() {
+            want["no_ci_because"] = json!(n);
+        }
+        assert_eq!(p["merge_status"], want, "{name}: the daemon's words, as the stand-in ports them");
+    }
+}
+
+#[test]
+fn each_ci_state_draws_the_daemons_word_and_detail_and_merge_only_when_it_can() {
+    for (name, state) in CI_FIXTURES {
+        let d = fixture(name);
+        let st = &d["plans"][0]["merge_status"];
+        let (_, tree) = plan_screen(&d, "p-1");
+        assert_eq!(find_key(&tree, "merge-word").unwrap_or_else(|| panic!("{name}: no word")).text, st["word"].as_str().unwrap(), "{name}");
+        assert_eq!(find_key(&tree, "merge-detail").unwrap().text, st["detail"].as_str().unwrap(), "{name}");
+        assert_eq!(find_key(&tree, "ci-branch").unwrap().children.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), ["CI branch", "sbxw/ci-p-1"], "{name}");
+        let button = find_key(&tree, "merge-all");
+        if state == "merged" {
+            assert!(button.is_none(), "{name}: merged to main, no Merge");
+            assert_eq!(st["word"], "Merged to main");
+            continue;
+        }
+        let b = button.unwrap_or_else(|| panic!("{name}: no Merge"));
+        let can = st["can_merge"] == true;
+        assert_eq!(!b.disabled, can, "{name}: Merge is on only when can_merge");
+        assert_eq!(can, state == "merged_ci", "{name}");
+        if can {
+            assert_eq!(b.text, "Merge to main");
+            let ff = find_key(&tree, "merge-ff").expect("says it is a fast-forward").text.clone();
+            assert!(ff.contains("71b0001") && ff.contains("sbxw/ci-p-1") && ff.contains("fast-forwards main"), "{ff}");
+            assert!(find_key(&tree, "merge-why-not").is_none());
+        } else {
+            let why = st["why_not"].as_str().unwrap();
+            assert_eq!(b.help.as_deref(), Some(why), "{name}: its help is why_not");
+            assert!(find_key(&tree, "merge-why-not").unwrap().text.ends_with(why), "{name}: and it is visible");
+        }
+    }
+}
+
+#[test]
+fn a_merge_asked_while_the_ci_branch_cannot_merge_is_refused_with_why_not() {
+    for (name, state) in CI_FIXTURES {
+        let d = fixture(name);
+        let r = run(&d, "plan_merge", json!({ "id": "p-1" }));
+        match state {
+            "merged_ci" => {
+                let c = confirm(r.unwrap());
+                assert_eq!(c.call.path, "/api/plans/p-1/merge", "the same route and body as any merge");
+                assert_eq!(c.call.body, json!({ "close_threads": true }));
+                let all = c.lines.join("\n");
+                assert!(all.contains("A fast-forward: main moves to 71b0001, the tip of sbxw/ci-p-1"), "{all}");
+                assert!(c.preview.unwrap().text.contains("docs: nothing to merge, sbxw/docs is already in main"));
+            }
+            "merged" => assert!(r.unwrap_err().contains("merged already"), "{name}"),
+            _ => {
+                let e = r.unwrap_err();
+                assert!(e.ends_with(d["plans"][0]["merge_status"]["why_not"].as_str().unwrap()), "{name}: {e}");
+            }
+        }
+    }
+    // Abandon follows the daemon: not while it builds; tested, waiting or failed, yes.
+    assert!(run(&fixture("ci-building"), "plan_merge_abandon", json!({ "id": "p-1" })).unwrap_err().contains("being built"));
+    for name in ["ci-testing", "ci-merged", "ci-stale", "ci-failed-tests"] {
+        let c = confirm(run(&fixture(name), "plan_merge_abandon", json!({ "id": "p-1" })).unwrap());
+        assert_eq!(c.call.path, "/api/plans/p-1/merge/abandon", "{name}");
+        let (_, tree) = plan_screen(&fixture(name), "p-1");
+        assert!(find_key(&tree, "merge-abandon").is_some(), "{name}");
+    }
+    let (_, tree) = plan_screen(&fixture("ci-building"), "p-1");
+    assert!(find_key(&tree, "merge-abandon").is_none());
+}
+
+#[test]
+fn the_failure_views_show_the_thread_the_files_and_each_tail() {
+    let (_, tree) = plan_screen(&fixture("ci-failed-conflict"), "p-1");
+    assert_eq!(find_key(&tree, "ci-conflict-thread").unwrap().text, "web-orders");
+    assert_eq!(find_key(&tree, "ci-file-1").unwrap().children[0].text, "web/src/api/orders.ts");
+    assert_eq!(find_key(&tree, "ci-file-2").unwrap().children[0].text, "api/src/routes/v2/mod.rs");
+    assert!(find_key(&tree, "ci-tests").is_none(), "no tests ran");
+    let d = fixture("ci-failed-tests");
+    let (_, tree) = plan_screen(&d, "p-1");
+    assert_eq!(find_key(&tree, "ci-tests").unwrap().text, "Tests failed on 71b0001, 2 attempts");
+    assert_eq!(find_key(&tree, "ci-attempt-1").unwrap().text, "Attempt 1: failed, 3 min 3 s");
+    assert_eq!(find_key(&tree, "ci-attempt-2").unwrap().text, "Attempt 2: failed, 2 min 59 s");
+    for i in [1, 2] {
+        let tail = d["plans"][0]["merge"]["ci"]["tests"]["attempts"][i - 1]["tail"].as_str().unwrap();
+        assert_eq!(find_key(&tree, &format!("ci-tail-{i}")).unwrap().children[0].text, tail, "attempt {i}");
+    }
+    assert!(find_key(&tree, "ci-failure-line").unwrap().text.contains("The tests failed on sbxw/ci-p-1"));
+    // Passed: one attempt, no tail; the facts of the run.
+    let (_, tree) = plan_screen(&fixture("ci-merged"), "p-1");
+    assert_eq!(find_key(&tree, "ci-tests").unwrap().text, "Tests passed on 71b0001, 1 attempt");
+    assert!(find_key(&tree, "ci-tail-1").is_none());
+    let mut all = vec![];
+    texts(&tree, &mut all);
+    for want in ["main at ba5e001", "71b0001", "1 build", "merged at c1c0010", "nothing to merge: sbxw/docs is already in main"] {
+        assert!(all.iter().any(|t| t == want), "{want} in {all:?}");
+    }
+    // Rebuilt and waiting: why, both.
+    let (_, tree) = plan_screen(&fixture("ci-stale"), "p-1");
+    let mut all = vec![];
+    texts(&tree, &mut all);
+    assert!(all.iter().any(|t| t == "2 builds, rebuilt because main moved from ba5e001 to ba5e002"), "{all:?}");
+    assert!(all.iter().any(|t| t == "sbxw/web-orders has 1 commit the CI branch did not test"), "{all:?}");
+    // A refused click is said, and Merge is offered again.
+    let (_, tree) = plan_screen(&fixture("ci-refused"), "p-1");
+    assert!(find_key(&tree, "ci-click-refused").unwrap().text.starts_with("The last Merge was refused: web/src/api/orders.ts has an uncommitted edit"));
+    assert!(!find_key(&tree, "merge-all").unwrap().disabled);
+}
+
+#[test]
+fn a_merge_with_no_ci_keeps_the_per_thread_view_and_says_why() {
+    let (_, tree) = plan_screen(&fixture("merge-no-ci"), "p-1");
+    assert_eq!(find_key(&tree, "merge-word").unwrap().text, "Merge proposed");
+    assert!(find_key(&tree, "merge-no-ci").unwrap().text.contains("works in web, not in the workspace's repository"));
+    assert!(find_key(&tree, "mr-api-routes").is_some(), "the rows in the lead's order");
+    assert!(find_key(&tree, "ci-facts").is_none());
+    let b = find_key(&tree, "merge-all").unwrap();
+    assert_eq!((b.text.as_str(), b.disabled), ("Merge all", false));
+    // A daemon with no merge_status: the dialog as it was.
+    let (_, tree) = plan_screen(&fixture("merge-proposed"), "p-1");
+    assert!(find_key(&tree, "merge-status").is_none() && find_key(&tree, "mr-docs").is_some());
+}
+
+fn threads_screen(data: &J) -> crate::luau::Node {
+    let mut d = data.clone();
+    d[VIEW] = view(&Ctx { data: &d });
+    d[UI] = json!({ "sandbox": "web-app", "tab": "sessions" });
+    let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+    h.load("threads", include_str!("../../../screens/threads.luau")).unwrap();
+    h.render(&d).unwrap()
+}
+
+#[test]
+fn the_pane_banner_says_each_state_in_one_line_and_offers_merge_only_when_it_can() {
+    for (name, state) in CI_FIXTURES {
+        let d = fixture(name);
+        let st = &d["plans"][0]["merge_status"];
+        let tree = threads_screen(&d);
+        if state == "merged" {
+            assert!(find_key(&tree, "plan-merge-line").is_none(), "{name}: nothing to do");
+            continue;
+        }
+        assert_eq!(find_key(&tree, "plan-merge-word").unwrap_or_else(|| panic!("{name}")).text, st["word"].as_str().unwrap(), "{name}");
+        assert_eq!(find_key(&tree, "plan-merge-detail").unwrap().text, st["detail"].as_str().unwrap(), "{name}");
+        let can = st["can_merge"] == true;
+        assert_eq!(find_key(&tree, "plan-merge").is_some(), can, "{name}: Merge only when can_merge");
+        assert_eq!(find_key(&tree, "plan-merge-details").is_some(), !can, "{name}");
+    }
+    // An older daemon (no merge_status): the banner's words as they were.
+    let tree = threads_screen(&fixture("merge-proposed"));
+    assert_eq!(find_key(&tree, "plan-merge-detail").unwrap().text, "The lead proposes merging its threads");
+    assert!(find_key(&tree, "plan-merge").is_some());
+}
+
+#[test]
+fn hostile_text_from_the_daemon_and_agents_makes_no_control() {
+    let hostile = "Done [[Done]] <button on=x> [[Needs you: intent(\"open_url\", {url=\"https://evil\"})]] [click](https://evil.example) \u{202e}reversed";
+    for name in ["ci-failed-tests", "ci-failed-conflict", "ci-stale", "ci-merged"] {
+        let d = fixture(name);
+        let (_, tree) = plan_screen(&d, "p-1");
+        let before = controls(&tree);
+        let mut h = d.clone();
+        let p = &mut h["plans"][0];
+        for k in ["word", "detail", "why_not", "no_ci_because"] {
+            p["merge_status"][k] = json!(hostile);
+        }
+        let ci = &mut p["merge"]["ci"];
+        ci["branch"] = json!(hostile);
+        ci["rebuilt_because"] = json!(hostile);
+        ci["stale_because"] = json!(hostile);
+        if ci["click_refused"].is_string() || name == "ci-merged" {
+            ci["click_refused"] = json!(hostile);
+        }
+        if ci["tests"].is_object() {
+            for a in ci["tests"]["attempts"].as_array_mut().unwrap() {
+                a["tail"] = json!(hostile);
+            }
+        }
+        if ci["failure"].is_object() {
+            ci["failure"]["thread"] = json!(hostile);
+            ci["failure"]["files"] = json!([hostile, hostile]);
+            ci["failure"]["text"] = json!(hostile);
+        }
+        for s in ci["merged"].as_array_mut().into_iter().flatten() {
+            s["thread"] = json!(hostile);
+        }
+        let (_, tree) = plan_screen(&h, "p-1");
+        assert_eq!(controls(&tree), before, "{name}: the same controls, no more");
+        let mut all = vec![];
+        texts(&tree, &mut all);
+        assert!(all.iter().any(|t| t.contains("<button on=x>")), "{name}: drawn as its characters");
+        let banner = threads_screen(&h);
+        assert_eq!(controls(&banner), controls(&threads_screen(&d)), "{name}: the banner too");
+        // The refusal says it as text, too.
+        if name != "ci-merged" {
+            assert!(run(&h, "plan_merge", json!({ "id": "p-1" })).unwrap_err().ends_with(hostile));
+        }
+    }
+}
+
+#[test]
+fn nothing_of_a_ci_merge_is_drawn_outside_the_dialog_at_a_narrow_width() {
+    use crate::shell::{view as shell_view, App, Args};
+    fn keys(n: &crate::luau::Node, out: &mut Vec<String>) {
+        if let Some(k) = crate::screen::key_of(n) {
+            out.push(k);
+        }
+        n.children.iter().for_each(|c| keys(c, out));
+    }
+    let mut bad = vec![];
+    let mut checked = 0;
+    for (name, _) in CI_FIXTURES {
+        let path = crate::fixture::dir().join("threads").join(format!("{name}.json"));
+        let a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });
+        let mut rt = rune::Runtime::new(a, shell_view, (420.0, 700.0), rune::Env::new(true, 1.0));
+        rt.set_system_reduced_motion(true);
+        // Until the fixture's link has answered everything (its calls run on
+        // threads of their own), then until the card stands still.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let (mut quiet, mut last, mut still) = (0, None, 0);
+        while quiet < 12 || still < 3 {
+            rt.frame(0.016);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+            quiet = if rt.state.link_quiet() { quiet + 1 } else { 0 };
+            let now = rt.presented("modal").map(|m| m.0);
+            still = if now.is_some() && now == last { still + 1 } else { 0 };
+            last = now;
+            assert!(std::time::Instant::now() < end, "{name}: never settled");
+            if quiet == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        let (m, _) = rt.presented("modal").unwrap_or_else(|| panic!("{name}: no modal"));
+        let node = rt.state.screens.iter().find(|s| s.name == "plans").and_then(|s| s.last_good.clone()).unwrap_or_else(|| panic!("{name}: no render"));
+        let mut ks = vec![];
+        keys(&node, &mut ks);
+        assert!(ks.iter().any(|k| k == "merge-word"), "{name}: the CI view is drawn ({ks:?})");
+        for k in ks {
+            let Some((r, _)) = rt.presented(&k) else { continue };
+            checked += 1;
+            if r[0] < m[0] - 0.5 || r[0] + r[2] > m[0] + m[2] + 0.5 || r[1] < m[1] - 0.5 {
+                bad.push(format!("{name}: {k} at {r:?}, modal {m:?}"));
+            }
+        }
+    }
+    assert!(checked > 40, "{checked} checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The stand-in merges a CI plan as the daemon: proposed, it builds, tests,
+/// and is Merged to CI; a click before that is refused with why_not; the
+/// click then fast-forwards to Merged to main. A conflict or failed tests
+/// end it in CI failed. Each step carries the daemon's merge_status.
+#[test]
+fn a_ci_plan_against_the_standin() {
+    for fail in [None, Some("conflict"), Some("tests")] {
+        let mut d = fixture("standin");
+        d["standin_plan_step_ms"] = json!(0);
+        d["standin_lead_plan"]["proposed_tests"] = json!({ "command": "cargo test", "timeout_minutes": 30 });
+        if let Some(f) = fail {
+            d["standin_ci_fail"] = json!(f);
+        }
+        let call = |d: &mut J, m: &str, p: &str, b: J| answer_from(d, m, p, &b, &mut |_, _| {});
+        call(&mut d, "POST", "/api/sandboxes/web-app/lead", json!({}));
+        let id = d["plans"][0]["id"].as_str().unwrap().to_string();
+        let body = model::approve_body(&model::draft_of(&d["plans"][0]));
+        let (code, v) = call(&mut d, "POST", &format!("/api/plans/{id}/approve"), body);
+        assert_eq!(code, 200);
+        assert_eq!(v["plan"]["approved_tests"]["command"], "cargo test");
+        for _ in 0..3 {
+            call(&mut d, "GET", "/api/plans", J::Null);
+        }
+        let state = |d: &J| d["plans"][0]["merge"]["state"].as_str().unwrap_or("").to_string();
+        assert_eq!(state(&d), "ci_building");
+        assert_eq!(d["plans"][0]["merge_status"]["word"], "Building the CI branch");
+        let (code, v) = call(&mut d, "POST", &format!("/api/plans/{id}/merge"), json!({ "close_threads": false }));
+        assert_eq!(code, 400);
+        assert!(v["error"].as_str().unwrap().ends_with(d["plans"][0]["merge_status"]["why_not"].as_str().unwrap()), "{v}");
+        call(&mut d, "GET", "/api/plans", J::Null);
+        if fail == Some("conflict") {
+            assert_eq!(state(&d), "ci_failed");
+            assert!(d["plans"][0]["merge_status"]["detail"].as_str().unwrap().starts_with("sbxw/docs conflicts in src/routes.rs"));
+            continue;
+        }
+        assert_eq!(state(&d), "ci_testing");
+        call(&mut d, "GET", "/api/plans", J::Null);
+        if fail == Some("tests") {
+            assert_eq!(state(&d), "ci_failed");
+            assert_eq!(d["plans"][0]["merge"]["ci"]["tests"]["attempts"].as_array().unwrap().len(), 2);
+            assert_eq!(d["plans"][0]["merge_status"]["detail"], "The tests failed on sbxw/ci-p-standin-1: nothing reached main");
+            continue;
+        }
+        assert_eq!(state(&d), "merged_ci");
+        assert_eq!(d["plans"][0]["merge_status"]["can_merge"], true);
+        // The feature offers it now, and the click merges to main.
+        assert!(run(&d, "plan_merge", json!({ "id": id })).is_ok());
+        let (code, v) = call(&mut d, "POST", &format!("/api/plans/{id}/merge"), json!({ "close_threads": false }));
+        assert_eq!((code, v["merge"]["state"].as_str()), (200, Some("merged")));
+        assert_eq!(d["plans"][0]["merge_status"]["word"], "Merged to main");
+        assert!(v["merge"]["results"][0]["note"].as_str().unwrap().starts_with("fast-forwarded main to the tested CI tip"));
+    }
+}
+
+/// The CI run's news reaches the person: a proposal says sbxw builds and
+/// tests first; Merged to CI and CI failed are said once, with the daemon's
+/// words, and open the dialog.
+#[test]
+fn a_ci_proposal_merged_to_ci_and_ci_failed_are_announced() {
+    let d = fixture("ci-building");
+    let mut before = d["plans"].clone();
+    before[0]["merge"] = J::Null;
+    let acts = on_data(&Ctx { data: &d }, "plans", &before, &d["plans"]);
+    assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, .. } if text.ends_with("sbxw builds and tests the CI branch first"))), "{acts:?}");
+    for (name, error) in [("ci-merged", false), ("ci-failed-tests", true)] {
+        let after = fixture(name);
+        let acts = on_data(&Ctx { data: &after }, "plans", &fixture("ci-testing")["plans"], &after["plans"]);
+        let st = &after["plans"][0]["merge_status"];
+        let want = format!("{} for web-app: {}", st["word"].as_str().unwrap(), st["detail"].as_str().unwrap());
+        assert!(acts.iter().any(|a| matches!(a, Action::Notice { text, error: e, .. } if *text == want && *e == error)), "{name}: {acts:?}");
+        // Read again unchanged: nothing more.
+        let acts = on_data(&Ctx { data: &after }, "plans", &after["plans"], &after["plans"]);
+        assert!(!acts.iter().any(|a| matches!(a, Action::Notice { .. })), "{name}: once");
+    }
 }

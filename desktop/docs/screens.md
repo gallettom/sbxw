@@ -1945,13 +1945,69 @@ nothing only disables Open.
 |---|---|
 | `sessions` | `GET /api/sessions`: every hook report (`sandbox`, `thread`, `state`: `working`, `idle`, `attention`, `exited`, ...) |
 | `threads` | By sandbox, `GET /api/sandboxes/:name/threads`: `{ok, threads: [{name, open, repo, model, worktree: same\|own\|team}], open, max}` |
-| `plans` | `GET /api/plans`: every plan (`id`, `sandbox`, `summary`, `threads` with `state` and `summary`, `state`, `variant`, `justification`, `proposed_tests` (`{command, timeout_minutes}`, drawn as Tests in the review), `approved_tests`, `closed`, `merge`: `{order, note, state, base, results, distillate}`) |
+| `plans` | `GET /api/plans`: every plan (`id`, `sandbox`, `summary`, `threads` with `state` and `summary`, `state`, `variant`, `justification`, `proposed_tests` (`{command, timeout_minutes}`, drawn as Tests in the review), `approved_tests`, `closed`, `merge`: `{order, note, state, base, results, distillate, ci}`, and `merge_status` (below)) |
 | `leads`, `models` | `GET /api/leads` (the sandboxes that really lead), `GET /api/models` (`{ok, default, models: [{id, label}]}`) |
 | `lead_states` | `GET /api/lead-states`: `{ "<sandbox>": {state: waiting, activating or leading, since_ms, reason} }`, absent: off. Read again on `lead`, `lead-end`, `session` and at every connection. Before it is read (or from a daemon without the route), `leads` stands in |
 | `board` | By sandbox, `GET /api/sandboxes/:name/board`: `{plan, claims, entries}` |
-| `threads_view` | Set by the core: by sandbox, `{sessions: [{thread, kind, running, state, word, tone, label, summary, repo, model}], open, max, leading, lead, pending, merge}`. `leading`: the lead state is `leading`; `lead`: `leading`, `waiting`, `activating`, `unled` (off with a plan pending or a thread at work) or `off` |
+| `threads_view` | Set by the core: by sandbox, `{sessions: [{thread, kind, running, state, word, tone, label, summary, repo, model}], open, max, leading, lead, pending, merge, merge_line, merges}`. `merge`: the plan whose merge the bar offers (proposed, merging, failed, or Merged to CI); `merge_line`: the pane banner's line (below); `merges`: by plan id, the dialog's merge view (below). `leading`: the lead state is `leading`; `lead`: `leading`, `waiting`, `activating`, `unled` (off with a plan pending or a thread at work) or `off` |
 | `threads_ui` | Set by the core: `sandbox`, `tab`, `new` (`{sandbox, kind, suggest}`), `drafts` (by plan id: `{threads, variant}`), `plan_error`, `merge_close`, `merge_note` (by plan id), `repos_for`, `worktrees_for`, `remote` |
 | `thread_repos`, `worktrees` | Read on demand: `GET .../repos` (for `threads_ui.repos_for`), `GET .../worktrees` (for `worktrees_for`) |
+
+**Merge status and CI merges.** A split plan with an approved test
+command is merged through a CI branch (`sbxw/ci-<plan>`): `merge.state` is
+then `ci_building`, `ci_testing`, `merged_ci` ("Merged to CI"), `ci_stale`
+(main or a thread moved: the rebuild waits its turn), `ci_failed`, and
+`merging`, `merged` ("Merged to main") after the click. The daemon adds
+`merge_status` to every plan with a merge, `{word, detail, can_merge,
+why_not, ci, no_ci_because}` (`crates/core/src/plans/ci.rs`,
+`merge_status`), and `merge.ci` holds the run: `branch`, `base_branch`,
+`base`, `tip`, `builds`, `rebuilt_because`, `stale_because`, `merged`
+(`[{thread, tip, commit}]`), `skipped` (`[{thread, why}]`), `job`, `tests`
+(`{outcome, reused, commit, attempts: [{outcome, duration_ms, tail}]}`),
+`failure` (`{kind: conflict|tests|error, thread, files, text}`),
+`click_refused`. Nothing on screen works the status out from the state:
+the words are the daemon's.
+
+`threads::model::merge_view` makes `threads_view[sb].merges[id]` of it:
+`{state, word, detail, can_merge, why_not, ci, no_ci_because, tone, button}`,
+and for a CI merge `facts` (`[{k, label, text, mono}]`: CI branch, built on
+(base, short), tip (short), builds and why it was rebuilt, why it waits),
+`threads` (merged at a commit, or skipped and why), `tests` and
+`attempts` (`[{line, tail, tone}]`, a tail only for an attempt that did not
+pass, or every attempt in `ci_failed`; its last 30 lines), `failure`
+(`{kind, line, thread, files, text}`), `click_refused`, and in `merged_ci`
+`ff` (Merge fast-forwards the base to the short tip of the CI branch). A
+daemon that sends no `merge_status` gets no entry, and the dialog draws as
+before. `model::merge_line` makes the banner's `{plan, state, word, detail,
+can_merge, tone, button}` for the latest plan with a merge still to do (CI
+states included); from an older daemon, the banner's earlier words.
+
+The plan dialog draws `merge-status` (`merge-word`, `merge-detail`, and
+`merge-why-not` while it cannot merge, `merge-no-ci` when the daemon says
+why the merge has no CI branch). A CI merge then draws `ci-facts`
+(`ci-branch`, `ci-base`, `ci-tip`, `ci-builds`, `ci-stale`), `ci-thread-<n>`,
+`ci-failure` (`ci-conflict-thread`, `ci-file-<n>`), `ci-tests`,
+`ci-attempt-<n>` and `ci-tail-<n>`, `ci-click-refused` and `merge-ff`, in
+place of the per-thread rows; a merge without CI keeps the per-thread rows
+(`mr-<thread>`) and outcome. Merge (`merge-all`, "Merge to main" for a CI
+merge) is off while `can_merge` is false, its help `why_not`. Abandon merge
+is offered in the states the daemon abandons (proposed, failed,
+`ci_testing`, `merged_ci`, `ci_stale`, `ci_failed`). The Threads panel's
+banner (`plan-merge-line`: `plan-merge-word`, `plan-merge-detail`) has
+Merge (`plan-merge`) only when `can_merge`, else Details
+(`plan-merge-details`), both opening the dialog. Every string of it is
+drawn as text: the daemon's words, a branch name, a test's tail.
+
+Notices: a CI proposal ("... sbxw builds and tests the CI branch first"),
+and a merge reaching `merged_ci` or `ci_failed` ("<word> for <sandbox>:
+<detail>", the second as an error), each opening the dialog.
+
+Fixtures: `fixtures/threads/ci-building`, `ci-testing`, `ci-merged`,
+`ci-refused` (a click refused), `ci-stale`, `ci-failed-conflict`,
+`ci-failed-tests`, `ci-merged-main`, and `merge-no-ci` (a merge with no CI
+branch and the daemon's reason). The stand-in runs a CI plan as the daemon
+(`standin.rs`: proposal, build, tests, Merged to CI, the click; the key
+`standin_ci_fail` makes a run fail by a conflict or by its tests).
 
 **Extras.** Rows under a sandbox (`extra-row-<sandbox>-<main|thread>`)
 once it has a second session; `extra-sandbox-<name>-threads` (opens the
@@ -2001,7 +2057,8 @@ draws the same states (`lead-end`, `lead-cancel`, `lead-resume`,
 | `plan_refuse` | `id`, `note` | direct | Refuses; the lead reads the note |
 | `merge_close_set` | `id`, `on` | direct | Close the threads once merged (default on) |
 | `plan_approve` | `id` | approval | The core reads the sessions, its dialog lists the draft, the changes and the sessions it starts; over the ceiling it says how many are open, which, how many are free, how to free one. Approved (here or elsewhere), its threads open no pane on their own and the focus stays: the daemon starts them, the sidebar (under the leader), the Board and the Threads view list them at once, and a click on a row opens its pane (unlike the web UI's `openPlanPanes`) |
-| `plan_merge` | `id` | approval | The core's dialog: order, note, base, distillate, whether threads close; refused while a shared plan's files are claimed |
+| `plan_merge` | `id` | approval | The core's dialog: order, note, base, distillate, whether threads close; refused while a shared plan's files are claimed, and while `merge_status.can_merge` is false, with its `why_not`. In `merged_ci` it says the click is a fast-forward to the tested tip of the CI branch; it posts the same route and body |
+| `plan_merge_abandon` | `id` | approval | The core's dialog, then the merge is withdrawn: nothing merged, closed or deleted. Refused while merging, while a CI branch is being built, once merged or abandoned |
 | `thread_close` | `sandbox`, `thread` | approval | Reads what closing loses; the dialog needs uncommitted files discarded explicitly; its panes go once closed |
 
 ### relay

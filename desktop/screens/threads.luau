@@ -94,17 +94,23 @@ local function plan_block(data, v, sb)
       icon{ "flag", color = "amber" }, text{ "The lead's plan waits for you", color = "text-bright", grow = 1, wrap = true },
       button{ "Review plan", variant = "primary", on = "review", arg = v.pending, key = "plan-review" } })
   end
-  if v.merge then
-    local p = plan_by_id(data, v.merge) or {}
-    local st = (p.merge or {}).state
-    table.insert(out, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "green-tint", border = "green",
-      icon{ "check", color = "green" },
-      text{ st == "merging" and "Merging the threads…" or (st == "failed" and "The merge stopped" or "The lead proposes merging its threads"), color = "text-bright", grow = 1, wrap = true },
-      button{ st == "failed" and "Retry merge" or "Merge…", on = "review", arg = v.merge, key = "plan-merge" } })
+  -- The merge to do, one line in the daemon's words (`merge_line`, from its
+  -- `merge_status`): Merge only while it can merge, else Details.
+  local ml = v.merge_line
+  if ml then
+    local tints = { green = "green-tint", red = "red-tint", amber = "amber-tint", blue = "blue-tint" }
+    local tone = ml.tone ~= "neutral" and ml.tone or "text-muted"
+    table.insert(out, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = tints[ml.tone] or "surface-alt", border = ml.tone ~= "neutral" and ml.tone or "elevated", key = "plan-merge-line",
+      icon{ ml.tone == "red" and "warning" or "check", color = tone },
+      column{ gap = 2, grow = 1,
+        text{ ml.word, weight = "semibold", color = "text-bright", wrap = true, key = "plan-merge-word" },
+        (ml.detail ~= "") and text{ ml.detail, size = "sm", color = "text-soft", wrap = true, key = "plan-merge-detail" } or false },
+      ml.can_merge and button{ ml.button, on = "review", arg = ml.plan, key = "plan-merge" }
+        or button{ "Details", variant = "ghost", on = "review", arg = ml.plan, key = "plan-merge-details" } })
   end
   -- Approved plans still at work: their status.
   for _, p in ipairs(data.plans or {}) do
-    if p.sandbox == sb and p.state == "approved" and not p.closed and p.id ~= v.merge and not (p.merge and p.merge.state == "merged") then
+    if p.sandbox == sb and p.state == "approved" and not p.closed and p.id ~= v.merge and not (ml and p.id == ml.plan) and not (p.merge and p.merge.state == "merged") then
       local n, done = 0, 0
       for _, t in ipairs(p.threads or {}) do n = n + 1; if t.state == "done" then done = done + 1 end end
       table.insert(out, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "elevated", key = "plan-" .. p.id,
