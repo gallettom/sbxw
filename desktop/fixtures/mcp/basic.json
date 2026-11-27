@@ -215,11 +215,29 @@
       "servers": [
         {
           "name": "linear",
-          "type": "remote"
+          "type": "remote",
+          "detail": {
+            "name": "linear",
+            "type": "remote",
+            "url": "https://mcp.linear.app/mcp",
+            "headers": [
+              "Authorization: Bearer ${TOKEN}",
+              "X-Org: acme"
+            ]
+          }
         },
         {
           "name": "playwright",
-          "type": "stdio"
+          "type": "stdio",
+          "detail": {
+            "name": "playwright",
+            "type": "stdio",
+            "command": "npx",
+            "args": [
+              "-y",
+              "@playwright/mcp@latest"
+            ]
+          }
         }
       ]
     },
