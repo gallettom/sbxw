@@ -654,12 +654,6 @@ fn check_text(what: &str, text: &str, max: usize) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // Secrets in MCP specs
 
-/// Header names whose value is a credential whatever it looks like.
-fn credential_header(name: &str) -> bool {
-    let n = name.trim().to_ascii_lowercase();
-    ["authorization", "cookie"].contains(&n.as_str()) || ["token", "secret", "key", "password", "auth"].iter().any(|w| n.contains(w))
-}
-
 /// Does `text` hold something shaped like a key or a token? The same shapes
 /// the concierge masks before sending text out ([`anonymise`]'s `secret`).
 fn looks_secret(text: &str) -> bool {
@@ -692,7 +686,7 @@ fn check_mcp_secrets(spec: &McpServerSpec) -> Result<(), String> {
         let (name, value) = h.split_once(':').unwrap_or((h.as_str(), ""));
         let literal = without_placeholders(value);
         let scheme_only = literal.split_whitespace().all(|w| ["bearer", "basic", "token"].contains(&w.to_ascii_lowercase().as_str()));
-        if (credential_header(name) && !scheme_only) || looks_secret(&literal) {
+        if (crate::mcp::credential_header(name) && !scheme_only) || looks_secret(&literal) {
             return Err(format!("header '{}' carries a literal credential. {SECRET_REFUSAL}", name.trim()));
         }
     }
@@ -1132,9 +1126,13 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             })
         }
         Change::McpServer { spec } => {
-            check_mcp_secrets(spec)?;
             let s = spec.to_spec();
+            // The core's refusal first, in its words (a credential header
+            // without a placeholder), as the MCP dialogs say it; then
+            // Jarvis's stricter one (no literal beside the placeholder, no
+            // key-shaped text anywhere).
             let args = s.add_args()?;
+            check_mcp_secrets(spec)?;
             let name = crate::mcp::check_name(&s.name)?;
             let servers = w.mcp.as_mut().ok_or("the MCP servers could not be listed")?;
             let replace = servers.contains(&name);
@@ -2379,7 +2377,13 @@ mod tests {
     fn an_mcp_server_never_carries_a_secret() {
         let w = world();
         let spec = |headers: Value| change(json!({"kind": "mcp_server", "spec": {"name": "acme", "kind": "remote", "url": "https://mcp.acme.com/mcp", "headers": headers}}));
-        for bad in [json!(["Authorization: Bearer abc123"]), json!(["X-Api-Key: whatever"]), json!(["X-Thing: sk-ant-api03-AbCdEf1234567890"])] {
+        for bad in [json!(["Authorization: Bearer abc123"]), json!(["X-Api-Key: whatever"]), json!(["Cookie: sid=zzz"])] {
+            let e = plan(&w, &[spec(bad.clone())]).unwrap_err();
+            let h = bad[0].as_str().unwrap();
+            assert_eq!(e, crate::mcp::header_refusal(h).unwrap(), "the dialogs' words: {bad}");
+            assert!(e.contains("carries a credential") && !e.contains(h.split_once(':').unwrap().1.trim()), "{bad}: {e}");
+        }
+        for bad in [json!(["X-Thing: sk-ant-api03-AbCdEf1234567890"]), json!(["Authorization: Bearer ${k} abc123"])] {
             let e = plan(&w, &[spec(bad.clone())]).unwrap_err();
             assert!(e.contains("MCP dialog"), "{bad}: {e}");
         }

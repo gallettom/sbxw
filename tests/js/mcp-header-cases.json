@@ -1,0 +1,22 @@
+{
+ "_": "The MCP credential header rule, shared by crates/core/src/mcp.rs (the authority), assets/js/mcp.js and the desktop (desktop/src/feat/mcp.rs, desktop/screens/mcp.luau). A name is split into word parts at every character that is not a letter or a digit; it carries a credential when one part starts or ends with a word of `words`. Such a header's value must hold a well-formed ${name} placeholder. `message` is the refusal, NAME replaced by the header name as typed.",
+ "words": ["auth", "token", "secret", "password", "passwd", "credential", "session", "cookie", "key"],
+ "message": "NAME carries a credential: write its value with a placeholder, such as `EXAMPLE`, and sbxw asks for the secret separately",
+ "example": { "authorization": "Bearer ${token}", "proxy-authorization": "Bearer ${token}", "other": "${token}" },
+ "credential": [
+  "Authorization", "authorization", "AUTHORIZATION", "Proxy-Authorization", "Cookie", "Set-Cookie",
+  "X-API-Key", "x-api-key", "Api-Key", "ApiKey", "X-Goog-Api-Key", "Ocp-Apim-Subscription-Key", "X-Key",
+  "X-Auth-Token", "X-Auth", "X-Access-Token", "AccessToken", "X-Csrf-Token", "Private-Token", "X-Gitlab-Token",
+  "X-Secret", "Client-Secret", "X-Password", "X-Passwd", "X-Credentials", "X-Session", "Session-Id", "Mcp-Session-Id",
+  "X_Api_Key", "x.api.key", "X-Authentication"
+ ],
+ "free": [
+  "Accept", "Accept-Language", "Accept-Encoding", "Content-Type", "User-Agent", "Cache-Control", "X-MCP-Toolsets",
+  "X-MCP-Readonly", "X-Request-Id", "X-Forwarded-For", "Mcp-Protocol-Version", "Keep-Alive", "If-None-Match",
+  "X-GitHub-Api-Version", "Anthropic-Version", "X-Tenant", "Origin", "Referer", "X-Region", "X-Workspace"
+ ],
+ "values": {
+  "ok": ["Bearer ${token}", "${api-key}", "${KEY}", "Basic ${b64}", "sid=${session_id}", "${a}${b}"],
+  "refused": ["Bearer abc123", "abc123", "Bearer ${}", "Bearer ${to ken}", "Bearer ${token", "Bearer $token", "Bearer {token}", "Bearer ${tök}", "$ {token}"]
+ }
+}

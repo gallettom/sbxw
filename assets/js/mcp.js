@@ -28,6 +28,7 @@ const mcpDir       = document.getElementById('mcp-dir');
 const mcpSave      = document.getElementById('mcp-save');
 const mcpCancel    = document.getElementById('mcp-cancel-edit');
 const mcpModeEl    = document.getElementById('mcp-mode');
+const mcpHeaderWhy = document.getElementById('mcp-header-why');
 
 let mcpServers = [];
 let mcpEditing = null;   // the name being edited, or null for a new server
@@ -106,6 +107,45 @@ function mcpClientIdOf(detail) {
 }
 // END mcp oauth rules
 
+// BEGIN mcp header rules
+// The core's credential header rule (crates/core/src/mcp.rs, header_refusal;
+// the daemon refuses the same and stays the authority), tested on the table
+// tests/js/mcp-header-cases.json the core and the desktop are tested on too.
+// A name carries a credential when one of its word parts (split at every
+// character not a letter or a digit) starts or ends with one of these words;
+// its value then needs a well-formed ${key}. The reason names the header only.
+const MCP_CREDENTIAL_WORDS = ['auth', 'token', 'secret', 'password', 'passwd', 'credential', 'session', 'cookie', 'key'];
+function mcpCredentialHeader(name) {
+  return String(name || '').toLowerCase().split(/[^a-z0-9]/).filter(Boolean)
+    .some(p => MCP_CREDENTIAL_WORDS.some(w => p.startsWith(w) || p.endsWith(w)));
+}
+function mcpHeaderRefusal(line) {
+  const s = String(line || '');
+  const i = s.indexOf(':');
+  if (i < 0) return '';
+  const name = s.slice(0, i).trim();
+  if (!mcpCredentialHeader(name) || /\$\{[A-Za-z0-9_-]+\}/.test(s.slice(i + 1))) return '';
+  const example = ['authorization', 'proxy-authorization'].includes(name.toLowerCase()) ? 'Bearer ${token}' : '${token}';
+  return `${name} carries a credential: write its value with a placeholder, such as \`${example}\`, and sbxw asks for the secret separately`;
+}
+// The first refusal among the typed header lines, or ''.
+function mcpHeadersRefusal(text) {
+  for (const h of String(text || '').split('\n')) {
+    const why = mcpHeaderRefusal(h.trim());
+    if (why) return why;
+  }
+  return '';
+}
+// END mcp header rules
+
+// The reason under the headers field, and Add off meanwhile (a Remote server).
+function mcpCheckHeaders() {
+  const why = mcpKind.value === 'remote' ? mcpHeadersRefusal(mcpHeaders.value) : '';
+  showNote(mcpHeaderWhy, why);
+  mcpSave.disabled = !!why;
+  return why;
+}
+
 // On an edit an empty secret field keeps the stored secret.
 function mcpRenderSecrets() {
   const keys = mcpSecretKeys(mcpHeaders.value, mcpKind.value === 'remote' ? mcpClientId.value : '');
@@ -135,6 +175,7 @@ function mcpResetForm() {
   mcpKind.value = 'remote';
   mcpSecrets.innerHTML = '';
   mcpSyncKind();
+  mcpCheckHeaders();
 }
 
 function mcpStartEdit(s) {
@@ -156,6 +197,9 @@ function mcpStartEdit(s) {
   mcpDir.value = mcpField(d, 'dir', 'cwd', 'config.dir') || '';
   mcpSyncKind();
   mcpRenderSecrets();
+  // A header registered before the rule, with a literal credential: shown as
+  // listed, refused until its value is a placeholder; never sent back.
+  mcpCheckHeaders();
   showNote(mcpError, (mcpUrl.value || mcpCommand.value) ? '' : 'sbx did not list this server\'s settings; fill them in again (Inspect shows its headers).');
   mcpName.focus();
 }
@@ -172,6 +216,7 @@ async function mcpSubmit() {
     client_id: mcpKind.value === 'remote' ? mcpClientId.value.trim() : '',
   };
   if (!spec.name) { showNote(mcpError, 'A server needs a name'); return; }
+  if (mcpCheckHeaders()) return;
   if (mcpEditing && !confirm(
     `Save '${mcpEditing}'?\n\nsbx has no edit: the server is removed and added again, ` +
     `which drops its OAuth token (run sbx mcp auth again if it uses OAuth).`)) return;
@@ -180,6 +225,7 @@ async function mcpSubmit() {
   showNote(mcpError, '');
   const r = await postJsonOrError('/api/mcp', { spec, replace: mcpEditing, secrets });
   mcpSave.disabled = false;
+  mcpCheckHeaders();
   if (!r.ok) { showNote(mcpError, r.error || 'Could not save'); await mcpLoad(); return; }
   showToast(mcpEditing ? `${spec.name} saved` : `${spec.name} added`);
   mcpResetForm();
@@ -284,8 +330,8 @@ mcpListEl.addEventListener('click', e => {
   if (btn) mcpRowAction(btn);
 });
 mcpSandbox.addEventListener('change', () => { mcpRenderList(); mcpShowMode(); });
-mcpKind.addEventListener('change', () => { mcpSyncKind(); mcpRenderSecrets(); });
-mcpHeaders.addEventListener('input', mcpRenderSecrets);
+mcpKind.addEventListener('change', () => { mcpSyncKind(); mcpRenderSecrets(); mcpCheckHeaders(); });
+mcpHeaders.addEventListener('input', () => { mcpRenderSecrets(); mcpCheckHeaders(); });
 mcpClientId.addEventListener('input', mcpRenderSecrets);
 mcpSave.addEventListener('click', mcpSubmit);
 mcpCancel.addEventListener('click', () => { mcpResetForm(); showNote(mcpError, ''); });
