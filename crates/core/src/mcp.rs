@@ -13,6 +13,14 @@
 //! a confidential client's secret is stored as `mcp:<name>:client_secret`
 //! ([`CLIENT_SECRET`]) before the add, never in argv. That key is reserved: a
 //! header placeholder cannot take it.
+//!
+//! **A credential header takes a placeholder.** A header whose name says it
+//! carries a credential ([`credential_header`]) must hold a `${key}` in its
+//! value ([`header_refusal`]): typed in clear, the secret would be in sbx's
+//! argv, its stored definition and `sbx mcp ls`. [`McpSpec::add_args`] is the
+//! one place this is enforced (the daemon's route, Jarvis and every
+//! `Sbx::mcp_add` go through it); the web UI and the desktop mirror it, on the
+//! table `tests/js/mcp-header-cases.json` all three are tested on.
 
 use serde::{Deserialize, Serialize};
 
@@ -118,6 +126,61 @@ pub fn add_error_hint(spec: &McpSpec, said: &str) -> Option<&'static str> {
         .then_some("this server needs an OAuth client ID: fill the \"OAuth client ID\" field with the id of an OAuth app registered with the server's provider (GitHub: Settings, Developer settings, OAuth Apps)")
 }
 
+/// The words that make a header name a credential's, each alone
+/// (`tests/js/mcp-header-cases.json`).
+pub const CREDENTIAL_WORDS: &[&str] = &["authorization", "auth", "authentication", "token", "secret", "password", "passwd", "credential", "credentials", "cookie", "apikey"];
+
+/// The words that make `key` a credential's when next to it (before or
+/// after): `X-API-Key`, `Ocp-Apim-Subscription-Key`, not `Idempotency-Key`.
+pub const KEY_AFTER: &[&str] = &["api", "access", "secret", "private", "auth", "subscription", "license", "signing", "session"];
+
+/// Does a header of this name carry a credential? The name, lowercased, is
+/// split into words at every character that is not a letter or a digit, and
+/// decided on whole words: one is in [`CREDENTIAL_WORDS`], or is `key` next
+/// to a word of [`KEY_AFTER`]. So `Authorization`, `Cookie`, `X-API-Key`,
+/// `ApiKey`, `X-Auth-Token`, `X-Session-Key` do; `Accept`, `X-MCP-Toolsets`,
+/// `Mcp-Session-Id`, `Idempotency-Key`, `X-Author`, `X-Keyboard-Layout` do not.
+pub fn credential_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_ascii_alphanumeric()).filter(|p| !p.is_empty()).collect();
+    words.iter().enumerate().any(|(i, w)| {
+        CREDENTIAL_WORDS.contains(w) || (*w == "key" && [i.checked_sub(1), Some(i + 1)].into_iter().flatten().filter_map(|j| words.get(j)).any(|n| KEY_AFTER.contains(n)))
+    })
+}
+
+/// The well-formed `${key}` placeholders in `text`, once each, in order: a
+/// key is letters, digits, '-' and '_'.
+pub fn placeholders_in(text: &str, out: &mut Vec<String>) {
+    let mut rest = text;
+    while let Some(i) = rest.find("${") {
+        rest = &rest[i + 2..];
+        let Some(j) = rest.find('}') else { break };
+        let key = &rest[..j];
+        if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) && !out.iter().any(|k| k == key) {
+            out.push(key.to_string());
+        }
+        rest = &rest[j + 1..];
+    }
+}
+
+/// Why a header (`Name: value`) cannot be sent as written, for a credential
+/// header whose value holds no placeholder; `None` otherwise. The reason names
+/// the header only, never a part of its value.
+pub fn header_refusal(header: &str) -> Option<String> {
+    let (name, value) = header.split_once(':')?;
+    let name = name.trim();
+    if !credential_header(name) {
+        return None;
+    }
+    let mut keys = Vec::new();
+    placeholders_in(value, &mut keys);
+    if !keys.is_empty() {
+        return None;
+    }
+    let example = if matches!(name.to_ascii_lowercase().as_str(), "authorization" | "proxy-authorization") { "Bearer ${token}" } else { "${token}" };
+    Some(format!("{name} carries a credential: write its value with a placeholder, such as `{example}`, and sbxw asks for the secret separately"))
+}
+
 impl McpSpec {
     /// The argv of `sbx mcp add` for this spec, or why it cannot be added.
     pub fn add_args(&self) -> Result<Vec<String>, String> {
@@ -130,11 +193,17 @@ impl McpSpec {
                 for h in self.headers.iter().filter(|h| !h.trim().is_empty()) {
                     let h = value(h, "a header")?;
                     let Some((key, _)) = h.split_once(':') else {
-                        return Err(format!("'{h}': a header is 'Name: value'"));
+                        // Not repeated: a line without its name may be a pasted credential.
+                        return Err("a header is 'Name: value', and one has no ':'".into());
                     };
-                    let key = key.trim().to_ascii_lowercase();
+                    let shown = key.trim();
+                    let key = shown.to_ascii_lowercase();
                     if key.is_empty() || seen.contains(&key) {
-                        return Err(format!("'{h}': each header name once, and not empty"));
+                        // The name only: a value may be a credential.
+                        return Err(format!("'{shown}': each header name once, and not empty"));
+                    }
+                    if let Some(why) = header_refusal(&h) {
+                        return Err(why);
                     }
                     seen.push(key);
                     a.push(format!("--header={h}"));
@@ -173,16 +242,7 @@ impl McpSpec {
     pub fn placeholders(&self) -> Vec<String> {
         let mut out = Vec::new();
         for h in &self.headers {
-            let mut rest = h.as_str();
-            while let Some(i) = rest.find("${") {
-                rest = &rest[i + 2..];
-                let Some(j) = rest.find('}') else { break };
-                let key = &rest[..j];
-                if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) && !out.iter().any(|k| k == key) {
-                    out.push(key.to_string());
-                }
-                rest = &rest[j + 1..];
-            }
+            placeholders_in(h, &mut out);
         }
         out
     }
@@ -296,5 +356,72 @@ mod tests {
         assert!(add_error_hint(&none, said).unwrap().contains("OAuth client ID"));
         assert!(add_error_hint(&McpSpec { client_id: "abc".into(), ..none.clone() }, said).is_none());
         assert!(add_error_hint(&none, "error: something else").is_none());
+    }
+
+    /// The table the web UI's and the desktop's copies of the rule are tested on.
+    const CASES: &str = include_str!("../../../tests/js/mcp-header-cases.json");
+
+    fn cases() -> serde_json::Value {
+        serde_json::from_str(CASES).unwrap()
+    }
+
+    fn strs<'a>(v: &'a serde_json::Value) -> Vec<&'a str> {
+        v.as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect()
+    }
+
+    fn remote(headers: &[&str]) -> McpSpec {
+        McpSpec { name: "acme".into(), kind: "remote".into(), url: "https://x".into(), headers: headers.iter().map(|h| h.to_string()).collect(), ..Default::default() }
+    }
+
+    #[test]
+    fn the_shared_table_is_the_core_rule() {
+        let c = cases();
+        assert_eq!(strs(&c["words"]), CREDENTIAL_WORDS);
+        assert_eq!(strs(&c["key_after"]), KEY_AFTER);
+        for name in strs(&c["credential"]) {
+            assert!(credential_header(name), "{name} carries a credential");
+            for v in strs(&c["values"]["ok"]) {
+                assert!(remote(&[&format!("{name}: {v}")]).add_args().is_ok(), "{name}: {v}");
+            }
+            for v in strs(&c["values"]["refused"]) {
+                let e = remote(&[&format!("{name}: {v}")]).add_args().unwrap_err();
+                let key = name.to_ascii_lowercase();
+                let example = c["example"].get(key.as_str()).unwrap_or(&c["example"]["other"]).as_str().unwrap();
+                assert_eq!(e, c["message"].as_str().unwrap().replace("NAME", name).replace("EXAMPLE", example), "{name}: {v}");
+            }
+        }
+        for name in strs(&c["free"]) {
+            assert!(!credential_header(name), "{name} is free");
+            for v in strs(&c["values"]["refused"]) {
+                assert!(remote(&[&format!("{name}: {v}")]).add_args().is_ok(), "{name}: {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_literal_credential_is_refused_without_a_word_of_its_value() {
+        let token = "ghp_Sup3rS3cretT0kenValue";
+        for h in [format!("Authorization: Bearer {token}"), format!("x-api-key:{token}"), format!("COOKIE: sid={token}"), format!("X-Auth-Token: {token} ${{")] {
+            let e = remote(&["Accept: application/json", &h]).add_args().unwrap_err();
+            assert!(e.contains("carries a credential") && e.contains("placeholder"), "{e}");
+            assert!(!e.contains(token) && !e.contains("Sup3r") && !e.contains("sid="), "{e}");
+        }
+        let e = remote(&["Authorization: Bearer abc"]).add_args().unwrap_err();
+        assert_eq!(e, "Authorization carries a credential: write its value with a placeholder, such as `Bearer ${token}`, and sbxw asks for the secret separately");
+        // Other refusals of a header name it, never repeat its value.
+        let e = remote(&["Authorization: Bearer ${a}", "authorization: Bearer s3cr3t"]).add_args().unwrap_err();
+        assert!(e.contains("authorization") && !e.contains("s3cr3t"), "{e}");
+        let e = remote(&["Bearer s3cr3t"]).add_args().unwrap_err();
+        assert!(!e.contains("s3cr3t"), "{e}");
+    }
+
+    #[test]
+    fn a_credential_header_with_a_placeholder_goes_and_other_headers_stay_free() {
+        let spec = remote(&["Authorization: Bearer ${token}", "X-MCP-Toolsets: repos", "Accept: application/json"]);
+        assert_eq!(spec.add_args().unwrap()[4], "--header=Authorization: Bearer ${token}");
+        assert_eq!(spec.placeholders(), ["token"]);
+        assert!(header_refusal("Accept: application/json").is_none());
+        assert!(header_refusal("Api-Key: ${k}").is_none());
+        assert!(header_refusal("Api-Key: $k").is_some());
     }
 }

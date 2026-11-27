@@ -2242,6 +2242,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_a_literal_credential_header_is_refused_before_sbx_is_called() {
+        let (_dir, app, fake) = crate::testing::app_with(crate::testing::sbx_answer);
+        let spec = json!({ "name": "acme", "kind": "remote", "url": "https://x", "headers": ["Authorization: Bearer ghp_literal0123"] });
+        let e = mcp_save(State(app.clone()), mcp_body(json!({ "spec": spec, "replace": "acme", "secrets": { "token": "t0k" } }))).await.unwrap_err();
+        assert!(e.message.contains("Authorization carries a credential") && !e.message.contains("ghp_literal"), "{}", e.message);
+        assert!(!fake.called("mcp") && !fake.called("secret set"), "nothing reaches sbx, not even the rm of an edit: {:?}", fake.log());
+        let spec = json!({ "name": "acme", "kind": "remote", "url": "https://x", "headers": ["Authorization: Bearer ${token}"] });
+        let _ = mcp_save(State(app), mcp_body(json!({ "spec": spec, "secrets": { "token": "t0k" } }))).await.unwrap();
+        assert!(fake.called("mcp add acme") && fake.called("secret set mcp:acme:token"), "{:?}", fake.log());
+    }
+
+    #[tokio::test]
     async fn mcp_sbx_asking_for_a_client_id_says_to_fill_the_field() {
         let (_dir, app, _fake) = crate::testing::app_with(|a: &[String]| {
             if a.starts_with(&["mcp".to_string(), "add".to_string()]) {

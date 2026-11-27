@@ -1132,6 +1132,11 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             })
         }
         Change::McpServer { spec } => {
+            // The core's refusal first, in the MCP dialogs' words; then
+            // Jarvis's own, stricter.
+            if let Some(why) = spec.headers.iter().find_map(|h| crate::mcp::header_refusal(h)) {
+                return Err(why);
+            }
             check_mcp_secrets(spec)?;
             let s = spec.to_spec();
             let args = s.add_args()?;
@@ -2379,10 +2384,25 @@ mod tests {
     fn an_mcp_server_never_carries_a_secret() {
         let w = world();
         let spec = |headers: Value| change(json!({"kind": "mcp_server", "spec": {"name": "acme", "kind": "remote", "url": "https://mcp.acme.com/mcp", "headers": headers}}));
-        for bad in [json!(["Authorization: Bearer abc123"]), json!(["X-Api-Key: whatever"]), json!(["X-Thing: sk-ant-api03-AbCdEf1234567890"])] {
+        for bad in [json!(["Authorization: Bearer abc123"]), json!(["X-Api-Key: whatever"]), json!(["Cookie: sid=zzz"])] {
+            let e = plan(&w, &[spec(bad.clone())]).unwrap_err();
+            let h = bad[0].as_str().unwrap();
+            assert_eq!(e, format!("change 1 (mcp_server): {}", crate::mcp::header_refusal(h).unwrap()), "the dialogs' words: {bad}");
+            assert!(e.contains("carries a credential") && !e.contains(h.split_once(':').unwrap().1.trim()), "{bad}: {e}");
+        }
+        for bad in [json!(["X-Thing: sk-ant-api03-AbCdEf1234567890"]), json!(["Authorization: Bearer ${k} abc123"])] {
             let e = plan(&w, &[spec(bad.clone())]).unwrap_err();
             assert!(e.contains("MCP dialog"), "{bad}: {e}");
         }
+        // Jarvis stays stricter than the forms: what it refused before the
+        // core's rule, it still refuses, in its own words where the core lets
+        // the name go.
+        for h in ["X-Key: literal", "Idempotency-Key: 1", "X-Author: someone", "X-Keyboard-Layout: fr", "X-Secrets: abc", "Mcp-Session-Id: sk-ant-api03-AbCdEf1234567890", "X-Api-Key: ${k} abc"] {
+            let e = plan(&w, &[spec(json!([h]))]).unwrap_err();
+            assert!(e.contains("MCP dialog"), "{h}: {e}");
+            assert!(crate::mcp::header_refusal(h).is_none(), "the forms let it go: {h}");
+        }
+        assert!(plan(&w, &[spec(json!(["Idempotency-Key: ${k}", "Accept: application/json", "Mcp-Session-Id: abc"]))]).is_ok());
         let ok = plan(&w, &[spec(json!(["Authorization: Bearer ${api-key}", "Accept: application/json"]))]).unwrap();
         assert!(ok[0].view.diff.contains("+ sbx mcp add acme --url=https://mcp.acme.com/mcp") && ok[0].view.diff.contains("${api-key}"), "{}", ok[0].view.diff);
         let replace = plan(&w, &[change(json!({"kind": "mcp_server", "spec": {"name": "github", "kind": "remote", "url": "https://x"}}))]).unwrap();

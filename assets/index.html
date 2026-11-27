@@ -1355,12 +1355,14 @@
             <div class="mcp-remote">
               <input id="mcp-url" class="field-input" type="text" spellcheck="false" placeholder="https://mcp.example.com/mcp" aria-label="URL">
               <textarea id="mcp-headers" class="field-input" rows="2" spellcheck="false"
-                        placeholder="Authorization: Bearer ${api-key}&#10;one header per line" aria-label="Headers"></textarea>
+                        placeholder="Authorization: Bearer ${api-key}&#10;one header per line" aria-label="Headers" aria-describedby="mcp-header-why"></textarea>
+              <span class="create-error hidden" id="mcp-header-why" role="alert"></span>
               <input id="mcp-client-id" class="field-input" type="text" spellcheck="false" autocomplete="off" placeholder="OAuth client ID (optional)" aria-label="OAuth client ID" aria-describedby="mcp-client-id-help">
               <p class="mcp-hint" id="mcp-client-id-help">Only for a server that needs a pre-registered OAuth client, such as GitHub.
                 Its client secret, if it has one, is asked below and stored as <code>mcp:&lt;name&gt;:client_secret</code>.</p>
               <div id="mcp-secrets"></div>
               <p class="mcp-hint">A <code>${key}</code> in a header is a secret, stored as <code>mcp:&lt;name&gt;:&lt;key&gt;</code>.
+                A header that carries a credential (Authorization, Cookie, a name with key, token, secret, auth…) needs one.
                 OAuth servers are added unauthorized: run <code>sbx mcp auth &lt;name&gt;</code> in a terminal.</p>
             </div>
             <div class="mcp-stdio hidden">

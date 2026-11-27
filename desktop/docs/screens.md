@@ -1849,7 +1849,21 @@ a value as `${NAME}` and is asked in the next dialog. The screen sends
 name or value left out; the hint lists every `${KEY}` of all rows. A row
 that cannot be sent as typed shows its reason under it (`mcp-h-why-<n>`)
 and Add… is disabled: a `;` in a value (the intent splits on `;`), a name
-that is not an HTTP token, or a name set twice.
+that is not an HTTP token, a name set twice, or a credential header without
+a `${KEY}` ("Authorization carries a credential: write its value with a
+placeholder, such as `Bearer ${token}`, and sbxw asks for the secret
+separately"). That is the core's rule (`crates/core/src/mcp.rs`,
+`header_refusal`), decided on the name's whole words (split at every
+character not a letter or a digit): `authorization`, `auth`,
+`authentication`, `token`, `secret`, `password`, `passwd`, `credential`,
+`credentials`, `cookie`, `apikey`, or `key` beside `api`, `access`,
+`secret`, `private`, `auth`, `subscription`, `license`, `signing` or
+`session` (`Mcp-Session-Id`, `Idempotency-Key`, `X-Author` stay free);
+picked names and Custom ones alike. `mcp_save` refuses the same before it builds
+its Confirm, so a literal credential is never drawn in it. An edit of a
+server registered before the rule with a literal credential pre-fills it
+as listed, with the reason under the row and Save off until the value is a
+placeholder: it is never sent back.
 
 **OAuth client ID** (a Remote server, under the header rows): one optional
 input, `mcp-client-id`, with one line of help ("Only for a server that
@@ -1901,7 +1915,7 @@ or a failed read: "unknown" in a neutral badge and the daemon's note
 | `mcp_auth` | `server` | direct | `sbx mcp auth`, in this machine's browser |
 | `mcp_inspect`, `mcp_inspect_close` | `server` / none | direct | Shows or hides `sbx mcp inspect` |
 | `mcp_rm` | `server` | approval | Unregisters a server |
-| `mcp_save` | `name`, `kind` (`remote`, `stdio`), `url`, `headers` (`;` or new lines), `command`, `args`, `dir`, `replace` | approval | Registers (or replaces) a server; one secret field per `${KEY}`; a `stdio` one shows its host command and needs "I have read this command" |
+| `mcp_save` | `name`, `kind` (`remote`, `stdio`), `url`, `headers` (`;` or new lines), `command`, `args`, `dir`, `replace` | approval | Registers (or replaces) a server; one secret field per `${KEY}`; a credential header without a `${KEY}` is refused before its Confirm; a `stdio` one shows its host command and needs "I have read this command" |
 
 #### skills
 
