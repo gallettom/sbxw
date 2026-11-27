@@ -760,6 +760,7 @@ fn refusal_of(c: &J, name: &str) -> String {
 fn the_shared_table_is_the_intents_rule_and_the_screens() {
     let c = header_cases();
     assert_eq!(strs(&c["words"]), CREDENTIAL_WORDS);
+    assert_eq!(strs(&c["key_after"]), KEY_AFTER);
     let data = fixture("full");
     let save = |h: &str| run(&data, "mcp_save", json!({ "name": "acme", "kind": "remote", "url": "https://x", "headers": h }));
     for name in strs(&c["credential"]) {

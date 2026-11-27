@@ -17,8 +17,8 @@
 //! no dynamic client registration, such as GitHub) adds one optional secret,
 //! the client secret, asked in the same dialog (`secrets.client_secret`; the
 //! daemon stores it as `mcp:<name>:client_secret` before the add). A header
-//! that carries a credential (`Authorization`, `Cookie`, a name with `key`,
-//! `token`...) without a `${KEY}` is refused before the Confirm is built, in
+//! that carries a credential (`Authorization`, `Cookie`, `X-API-Key`,
+//! `X-Auth-Token`...) without a `${KEY}` is refused before the Confirm is built, in
 //! the core's words ([`header_refusal`]; the screen says it under the row).
 //!
 //! The stand-in answers these routes in `setup/standin.rs` (one fixture
@@ -126,13 +126,19 @@ pub fn client_id_ok(id: &str) -> bool {
 }
 
 /// The core's credential header words (`crates/core/src/mcp.rs`,
-/// `CREDENTIAL_WORDS`; `tests/js/mcp-header-cases.json`).
-pub const CREDENTIAL_WORDS: &[&str] = &["auth", "token", "secret", "password", "passwd", "credential", "session", "cookie", "key"];
+/// `CREDENTIAL_WORDS` and `KEY_AFTER`; `tests/js/mcp-header-cases.json`).
+pub const CREDENTIAL_WORDS: &[&str] = &["authorization", "auth", "authentication", "token", "secret", "password", "passwd", "credential", "credentials", "cookie", "apikey"];
+pub const KEY_AFTER: &[&str] = &["api", "access", "secret", "private", "auth", "subscription", "license", "signing", "session"];
 
 /// The core's credential header rule (`crates/core/src/mcp.rs`,
-/// `credential_header`): a word part of the name starts or ends with a word.
+/// `credential_header`): on whole words, a credential word, or `key` next to
+/// a word of [`KEY_AFTER`].
 pub fn credential_header(name: &str) -> bool {
-    name.to_ascii_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|p| !p.is_empty()).any(|p| CREDENTIAL_WORDS.iter().any(|w| p.starts_with(w) || p.ends_with(w)))
+    let lower = name.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_ascii_alphanumeric()).filter(|p| !p.is_empty()).collect();
+    words.iter().enumerate().any(|(i, w)| {
+        CREDENTIAL_WORDS.contains(w) || (*w == "key" && [i.checked_sub(1), Some(i + 1)].into_iter().flatten().filter_map(|j| words.get(j)).any(|n| KEY_AFTER.contains(n)))
+    })
 }
 
 /// The core's refusal of a credential header without a `${KEY}`

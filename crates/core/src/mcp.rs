@@ -126,22 +126,26 @@ pub fn add_error_hint(spec: &McpSpec, said: &str) -> Option<&'static str> {
         .then_some("this server needs an OAuth client ID: fill the \"OAuth client ID\" field with the id of an OAuth app registered with the server's provider (GitHub: Settings, Developer settings, OAuth Apps)")
 }
 
-/// The words that make a header name a credential's, as the start or the end
-/// of one of its word parts (`tests/js/mcp-header-cases.json`).
-pub const CREDENTIAL_WORDS: &[&str] = &["auth", "token", "secret", "password", "passwd", "credential", "session", "cookie", "key"];
+/// The words that make a header name a credential's, each alone
+/// (`tests/js/mcp-header-cases.json`).
+pub const CREDENTIAL_WORDS: &[&str] = &["authorization", "auth", "authentication", "token", "secret", "password", "passwd", "credential", "credentials", "cookie", "apikey"];
+
+/// The words that make `key` a credential's when next to it (before or
+/// after): `X-API-Key`, `Ocp-Apim-Subscription-Key`, not `Idempotency-Key`.
+pub const KEY_AFTER: &[&str] = &["api", "access", "secret", "private", "auth", "subscription", "license", "signing", "session"];
 
 /// Does a header of this name carry a credential? The name, lowercased, is
-/// split into word parts at every character that is not a letter or a digit;
-/// it does when one part starts or ends with a word of [`CREDENTIAL_WORDS`]:
-/// `Authorization`, `Proxy-Authorization`, `Cookie`, `X-API-Key`, `ApiKey`,
-/// `X-Auth-Token`, `Mcp-Session-Id`; not `Accept`, `X-MCP-Toolsets`,
-/// `Keep-Alive`. A harmless name caught by it (`Idempotency-Key`) still goes
-/// with its value stored as a secret.
+/// split into words at every character that is not a letter or a digit, and
+/// decided on whole words: one is in [`CREDENTIAL_WORDS`], or is `key` next
+/// to a word of [`KEY_AFTER`]. So `Authorization`, `Cookie`, `X-API-Key`,
+/// `ApiKey`, `X-Auth-Token`, `X-Session-Key` do; `Accept`, `X-MCP-Toolsets`,
+/// `Mcp-Session-Id`, `Idempotency-Key`, `X-Author`, `X-Keyboard-Layout` do not.
 pub fn credential_header(name: &str) -> bool {
-    name.to_ascii_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|p| !p.is_empty())
-        .any(|p| CREDENTIAL_WORDS.iter().any(|w| p.starts_with(w) || p.ends_with(w)))
+    let lower = name.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_ascii_alphanumeric()).filter(|p| !p.is_empty()).collect();
+    words.iter().enumerate().any(|(i, w)| {
+        CREDENTIAL_WORDS.contains(w) || (*w == "key" && [i.checked_sub(1), Some(i + 1)].into_iter().flatten().filter_map(|j| words.get(j)).any(|n| KEY_AFTER.contains(n)))
+    })
 }
 
 /// The well-formed `${key}` placeholders in `text`, once each, in order: a
@@ -373,6 +377,7 @@ mod tests {
     fn the_shared_table_is_the_core_rule() {
         let c = cases();
         assert_eq!(strs(&c["words"]), CREDENTIAL_WORDS);
+        assert_eq!(strs(&c["key_after"]), KEY_AFTER);
         for name in strs(&c["credential"]) {
             assert!(credential_header(name), "{name} carries a credential");
             for v in strs(&c["values"]["ok"]) {

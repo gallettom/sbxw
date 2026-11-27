@@ -1853,10 +1853,13 @@ that is not an HTTP token, a name set twice, or a credential header without
 a `${KEY}` ("Authorization carries a credential: write its value with a
 placeholder, such as `Bearer ${token}`, and sbxw asks for the secret
 separately"). That is the core's rule (`crates/core/src/mcp.rs`,
-`header_refusal`): a name whose word part (split at every character not a
-letter or a digit) starts or ends with `auth`, `token`, `secret`,
-`password`, `passwd`, `credential`, `session`, `cookie` or `key`; picked
-names and Custom ones alike. `mcp_save` refuses the same before it builds
+`header_refusal`), decided on the name's whole words (split at every
+character not a letter or a digit): `authorization`, `auth`,
+`authentication`, `token`, `secret`, `password`, `passwd`, `credential`,
+`credentials`, `cookie`, `apikey`, or `key` beside `api`, `access`,
+`secret`, `private`, `auth`, `subscription`, `license`, `signing` or
+`session` (`Mcp-Session-Id`, `Idempotency-Key`, `X-Author` stay free);
+picked names and Custom ones alike. `mcp_save` refuses the same before it builds
 its Confirm, so a literal credential is never drawn in it. An edit of a
 server registered before the rule with a literal credential pre-fills it
 as listed, with the reason under the row and Save off until the value is a

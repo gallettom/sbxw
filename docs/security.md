@@ -445,8 +445,9 @@ write; read it.
   file.
 - An MCP server's header secret is a `${key}` placeholder, its value stored by
   `sbx secret set` as `mcp:<server>:<key>`. A header whose name says it carries
-  a credential (`Authorization`, `Cookie`, a name with `auth`, `token`,
-  `secret`, `key`...) is refused without one, by the daemon for every caller
+  a credential (`Authorization`, `Cookie`, `X-API-Key`, `X-Auth-Token`: a
+  word of its name such as `auth`, `token`, `secret`, `password`, `cookie`,
+  or `key` beside `api`, `access`, `secret`...) is refused without one, by the daemon for every caller
   (web UI, desktop app, Jarvis), so a secret typed in clear never reaches sbx's
   command line, its stored definition or `sbx mcp ls`.
 

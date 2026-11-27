@@ -111,13 +111,16 @@ function mcpClientIdOf(detail) {
 // The core's credential header rule (crates/core/src/mcp.rs, header_refusal;
 // the daemon refuses the same and stays the authority), tested on the table
 // tests/js/mcp-header-cases.json the core and the desktop are tested on too.
-// A name carries a credential when one of its word parts (split at every
-// character not a letter or a digit) starts or ends with one of these words;
+// A name carries a credential when, split into words at every character not
+// a letter or a digit and lowercased, one word is in MCP_CREDENTIAL_WORDS or
+// is `key` next to a word of MCP_KEY_AFTER (X-API-Key, not Idempotency-Key);
 // its value then needs a well-formed ${key}. The reason names the header only.
-const MCP_CREDENTIAL_WORDS = ['auth', 'token', 'secret', 'password', 'passwd', 'credential', 'session', 'cookie', 'key'];
+const MCP_CREDENTIAL_WORDS = ['authorization', 'auth', 'authentication', 'token', 'secret', 'password', 'passwd', 'credential', 'credentials', 'cookie', 'apikey'];
+const MCP_KEY_AFTER = ['api', 'access', 'secret', 'private', 'auth', 'subscription', 'license', 'signing', 'session'];
 function mcpCredentialHeader(name) {
-  return String(name || '').toLowerCase().split(/[^a-z0-9]/).filter(Boolean)
-    .some(p => MCP_CREDENTIAL_WORDS.some(w => p.startsWith(w) || p.endsWith(w)));
+  const words = String(name || '').toLowerCase().split(/[^a-z0-9]/).filter(Boolean);
+  return words.some((w, i) => MCP_CREDENTIAL_WORDS.includes(w)
+    || (w === 'key' && [words[i - 1], words[i + 1]].some(n => MCP_KEY_AFTER.includes(n))));
 }
 function mcpHeaderRefusal(line) {
   const s = String(line || '');

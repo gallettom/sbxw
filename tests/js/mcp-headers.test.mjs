@@ -15,7 +15,7 @@ function load() {
   const b = src.indexOf('// END mcp header rules');
   assert.ok(a >= 0 && b > a, 'markers');
   const ctx = vm.createContext({});
-  vm.runInContext(`${src.slice(a, b)}\nglobalThis.api = { MCP_CREDENTIAL_WORDS, mcpCredentialHeader, mcpHeaderRefusal, mcpHeadersRefusal };`, ctx);
+  vm.runInContext(`${src.slice(a, b)}\nglobalThis.api = { MCP_CREDENTIAL_WORDS, MCP_KEY_AFTER, mcpCredentialHeader, mcpHeaderRefusal, mcpHeadersRefusal };`, ctx);
   return ctx.api;
 }
 
@@ -23,8 +23,9 @@ const message = name => cases.message.replace('NAME', name)
   .replace('EXAMPLE', cases.example[name.toLowerCase()] || cases.example.other);
 
 test('the shared table: credential names need a well-formed placeholder, other names stay free', () => {
-  const { MCP_CREDENTIAL_WORDS, mcpCredentialHeader, mcpHeaderRefusal } = load();
+  const { MCP_CREDENTIAL_WORDS, MCP_KEY_AFTER, mcpCredentialHeader, mcpHeaderRefusal } = load();
   assert.deepEqual([...MCP_CREDENTIAL_WORDS], cases.words);
+  assert.deepEqual([...MCP_KEY_AFTER], cases.key_after);
   for (const name of cases.credential) {
     assert.ok(mcpCredentialHeader(name), name);
     for (const v of cases.values.ok) assert.equal(mcpHeaderRefusal(`${name}: ${v}`), '', `${name}: ${v}`);

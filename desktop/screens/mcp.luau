@@ -12,7 +12,7 @@
 --
 -- Headers: one row each, a name picked (or Custom) and a value; sent as
 -- "Name: value" lines. A value holding ";" is refused in the form, and so is
--- a credential header (Authorization, Cookie, a name with key, token...)
+-- a credential header (Authorization, Cookie, X-API-Key, X-Auth-Token...)
 -- whose value holds no ${KEY}.
 --
 -- OAuth client ID (remote only, optional): for a server with no dynamic
@@ -73,16 +73,19 @@ local function value_hint(name)
 end
 
 -- The core's credential header rule (crates/core/src/mcp.rs, header_refusal;
--- tests/js/mcp-header-cases.json): a name carries a credential when one of
--- its word parts (split at every character not a letter or a digit) starts
--- or ends with one of these words; its value then needs a ${KEY}. The reason
--- names the header only, never a part of its value.
-local CREDENTIAL_WORDS = { "auth", "token", "secret", "password", "passwd", "credential", "session", "cookie", "key" }
+-- tests/js/mcp-header-cases.json): the name, lowercased, split into words at
+-- every character not a letter or a digit, carries a credential when one
+-- word is in CREDENTIAL_WORDS, or is "key" next to a word of KEY_AFTER
+-- (X-API-Key, not Idempotency-Key); its value then needs a ${KEY}. The
+-- reason names the header only, never a part of its value.
+local CREDENTIAL_WORDS = { "authorization", "auth", "authentication", "token", "secret", "password", "passwd", "credential", "credentials", "cookie", "apikey" }
+local KEY_AFTER = { "api", "access", "secret", "private", "auth", "subscription", "license", "signing", "session" }
 local function credential_header(name)
-  for part in string.gmatch(string.lower(name or ""), "[%w]+") do
-    for _, w in ipairs(CREDENTIAL_WORDS) do
-      if string.sub(part, 1, #w) == w or (#part >= #w and string.sub(part, -#w) == w) then return true end
-    end
+  local words = {}
+  for w in string.gmatch(string.lower(name or ""), "[%w]+") do words[#words + 1] = w end
+  for i, w in ipairs(words) do
+    if contains(CREDENTIAL_WORDS, w) then return true end
+    if w == "key" and (contains(KEY_AFTER, words[i - 1]) or contains(KEY_AFTER, words[i + 1])) then return true end
   end
   return false
 end
