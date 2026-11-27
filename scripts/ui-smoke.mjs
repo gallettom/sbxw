@@ -133,6 +133,32 @@ await visit('New session on the main checkout', async () => {
 });
 await visit('Sidebar sessions', () => page.locator('.sbx-sessions-toggle').first().click(),
   () => page.screenshot({ path: png.replace(/\.png$/, '-sidebar.png') }));
+// One focus, two highlights: the focused pane and its sidebar row share one
+// colour, and a click on the row of a sandbox shown in another pane focuses
+// that pane, opening nothing.
+const focusState = () => page.evaluate((n) => {
+  const row = [...document.querySelectorAll('.sbx-item')].find(r => r.dataset.name === n);
+  const lit = [...document.querySelectorAll('.pane.focused')].map(el => el.id);
+  return {
+    lit, focused: focusedPane, rowLit: !!row?.classList.contains('focused'),
+    rowColor: row?.style.getPropertyValue('--pane-color') || '',
+    paneColor: document.getElementById(`pane-${focusedPane}`)?.style.getPropertyValue('--pane-color') || '',
+    threads: panes.slice(0, paneCount).map(p => p.thread || '-').join(','),
+  };
+}, sandbox);
+await visit('Focus highlight', async () => {
+  await page.locator('#pane-1 .pane-bar').click({ position: { x: 4, y: 4 } });
+  await page.waitForTimeout(300);
+}, async () => {
+  const one = await focusState();
+  if (one.focused !== 1 || one.lit.join() !== 'pane-1' || !one.rowLit || !one.rowColor || one.rowColor !== one.paneColor)
+    problems.push(`focus highlight, pane 1 focused: ${JSON.stringify(one)}`);
+  await page.locator('.sbx-item .sbx-name-text').first().click();
+  await page.waitForTimeout(400);
+  const two = await focusState();
+  if (two.focused !== 0 || two.lit.join() !== 'pane-0' || !two.rowLit || two.threads !== one.threads)
+    problems.push(`focus highlight, after a click on the row: ${JSON.stringify(two)}`);
+});
 // The voice concierge: nothing installed in the throwaway home, so its panel
 // says which command installs the models and offers the button — and the
 // talk button stays off.

@@ -146,6 +146,7 @@
     --dur-micro: 100ms;
     --dur-short: 150ms;
     --dur-medium: 220ms;
+    --dur-flash: 900ms;   /* the pane a sidebar click led to, pulsed once */
     --ease: cubic-bezier(.2, 0, 0, 1);
 
     /* Disabled: one recipe, with cursor and the native attribute. */
@@ -1301,6 +1302,26 @@
   .sbx-item.active {
     background: color-mix(in srgb, var(--group-color, transparent) 15%, var(--c-surface));
   }
+  /* The focused pane's row, in that pane's colour (--pane-color, set with
+     the class by applyFocusHighlight): a tint of it and a 1px ring inside
+     the row. The left border stays the workspace's hue. An inset shadow and
+     a background take no room, so nothing on the row moves. The UI has one
+     (dark) theme: against the tint the ring is 4.5:1 (violet) to 7:1 (sand),
+     5.6:1 to 9:1 against the sidebar, and the muted second line keeps
+     4.7:1 or more. A hue picked on a group chip is the person's own. */
+  .sbx-item.focused,
+  .sbx-item.focused:hover {
+    background: color-mix(in srgb, var(--pane-color, var(--c-focus)) 10%, var(--c-surface));
+    box-shadow: inset 0 0 0 1px var(--pane-color, var(--c-focus));
+  }
+  /* Under it, the session that pane shows, when the sessions are unfolded:
+     a little more of the tint and a bar in the colour on its left, inside
+     the button. */
+  .sbx-thread.focused {
+    background: color-mix(in srgb, var(--pane-color, var(--c-focus)) 10%, transparent);
+    box-shadow: inset 2px 0 0 var(--pane-color, var(--c-focus));
+    color: var(--c-text-bright);
+  }
 
   /* ── Agent activity, on the row's top edge ──
      Where the strip sits, only. The three states it can be in are shared with
@@ -2051,6 +2072,28 @@
     border: 1px solid var(--c-elevated); border-radius: var(--r-md);
   }
   .pane.focused { border-color: color-mix(in oklab, var(--c-blue) 45%, var(--c-elevated)); }
+  /* ── Focused pane and its sidebar row, one highlight in two places ──
+     applyFocusHighlight() (panes.js) reads the one record of focus and gives
+     the focused pane and its sidebar row the same --pane-color: the group's
+     hue when the sandbox is in several panes, else the focus blue. On the
+     pane it is a 2px ring laid over the border (half on the border, half
+     inside), over the group outline, so the focused pane of a group stands
+     out from its mates; an overlay, so nothing inside moves. Its outer half
+     sits on the dark canvas, which keeps it readable on a light terminal
+     colour (Paper) as on a dark one. */
+  .pane.focused::before, .pane.flash::before {
+    content: ''; position: absolute; inset: -1px; z-index: 21; pointer-events: none;
+    border: 2px solid var(--pane-color, var(--c-focus)); border-radius: inherit;
+  }
+  /* A sidebar click on the row: one pulse of that colour over the pane, so
+     the eye finds it among four or five. Reduced motion: the ring alone. */
+  .pane.flash::before { animation: pane-flash var(--dur-flash) var(--ease); }
+  @keyframes pane-flash {
+    0%   { box-shadow: inset 0 0 0 4px var(--pane-color, var(--c-focus));
+           background: color-mix(in oklab, var(--pane-color, var(--c-focus)) 16%, transparent); }
+    100% { box-shadow: inset 0 0 0 0 transparent; background: transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) { .pane.flash::before { animation: none; } }
   /* Reordering: the bar is the handle, the pane lifted reads as lifted, and
      the pane it would take the place of is outlined. */
   .pane-bar[draggable="true"] { cursor: grab; }
@@ -2123,7 +2166,7 @@
     background: var(--c-pane-bar, darkslategrey); border-bottom: 1px solid var(--c-elevated);
     flex-shrink: 0; height: 32px; font-size: var(--fs-sm);
   }
-  .pane.focused .pane-bar { border-bottom-color: var(--c-blue); }
+  .pane.focused .pane-bar { border-bottom-color: var(--pane-color, var(--c-blue)); }
 
   /* ── Agent activity, painted on that same underline ──
      The focused pane's blue line, promoted to an at-a-glance activity readout:
