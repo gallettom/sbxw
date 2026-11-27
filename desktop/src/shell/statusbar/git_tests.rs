@@ -110,6 +110,35 @@ fn run_real(rt: &mut rune::Runtime<App>, secs: f32) {
     }
 }
 
+/// How long a read of the fixture daemon may take on a loaded machine (a CI
+/// battery beside threads' builds) before a test says it never arrived.
+const READ_BOUND: f32 = 20.0;
+
+/// [`run_real`] until `done` holds, or `bound` seconds of real time: waits
+/// for what a read brings, not for a fixed time. Whether it held.
+fn run_real_until(rt: &mut rune::Runtime<App>, bound: f32, done: impl Fn(&rune::Runtime<App>) -> bool) -> bool {
+    let start = Instant::now();
+    let mut clock = 0.0;
+    while start.elapsed().as_secs_f32() < bound {
+        clock += 0.03;
+        rt.update(|s, tx| {
+            s.poll(clock, tx);
+        });
+        rt.frame(0.03);
+        if done(rt) {
+            for _ in 0..40 {
+                rt.frame(0.016);
+            }
+            return done(rt);
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    for _ in 0..40 {
+        rt.frame(0.016);
+    }
+    done(rt)
+}
+
 fn shown(rt: &rune::Runtime<App>) -> Option<String> {
     rt.presented("status-git")?;
     rt.elements().iter().find(|e| e.key.as_deref() == Some("status-git")).and_then(|e| e.label.clone())
@@ -205,11 +234,12 @@ fn a_scoped_screen_gives_its_sandbox_and_all_gives_nothing() {
         Intent::Feature(crate::feat::Asked { name: "worktrees_show", args: args.as_object().cloned().unwrap() })
     };
     rt.update(|s, _| s.run_intent("statusbar", ask(Some("sbxw-jarvis"))));
-    run_real(&mut rt, 1.5);
+    let read = run_real_until(&mut rt, READ_BOUND, |rt| shown(rt).as_deref() == Some("sbxw/main"));
     assert_eq!(rt.state.feats.overlay.as_ref().map(|o| o.0.as_str()), Some("worktrees"));
+    assert!(read, "sbxw-jarvis's read never arrived in {READ_BOUND} s: {:?}", shown(&rt));
     assert_eq!(shown(&rt).as_deref(), Some("sbxw/main"), "scope: that sandbox's main checkout");
     rt.update(|s, _| s.run_intent("statusbar", ask(None)));
-    run_real(&mut rt, 1.5);
+    run_real_until(&mut rt, READ_BOUND, |rt| shown(rt).is_none());
     assert_eq!(shown(&rt), None, "scope All");
 }
 
@@ -252,7 +282,8 @@ fn reads_are_rare_and_never_for_a_hidden_window_or_a_stopped_sandbox() {
 fn a_failed_read_keeps_the_last_value_and_says_nothing() {
     let t0 = Instant::now();
     let mut rt = rig(1800.0);
-    run_real(&mut rt, 1.0);
+    let read = run_real_until(&mut rt, READ_BOUND, |rt| shown(rt).is_some_and(|s| s.contains('/')));
+    assert!(read, "the first git read never arrived in {READ_BOUND} s: the bar shows {:?}", shown(&rt));
     assert_eq!(shown(&rt).as_deref(), Some("shop/main"));
     rt.update(|s, _| s.git_data(&format!("{KEY_PREFIX}better-checkout"), Err("the daemon answered 502".into()), t0 + Duration::from_secs(2)));
     run(&mut rt, t0, 2.0, 3.0);
