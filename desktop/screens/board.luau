@@ -345,9 +345,9 @@ local function state_badge(t, key)
 end
 
 -- The title slot beside the overlay's name holds the picker and the team's
--- state: about this much of the overlay's width (its name and close button
--- take the rest), and a state chip about this wide (11 pt, its padding).
-local TITLE_ROOM = 140
+-- state: the overlay's width less this much (its name and its close button,
+-- as picker_w keeps), and a state chip about this wide (11 pt, its padding).
+local TITLE_ROOM = 196
 local function state_w(s)
   local b = s.badge
   local w = (b and nz(b.word)) and b.word or (s.state or "")

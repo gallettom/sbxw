@@ -27,6 +27,12 @@
 //! reused (none for a plan with no test command), times the person was
 //! asked. An older daemon sends none: the summary stays as it was.
 //!
+//! A plan with a merge says its status in the daemon's words
+//! (`merge_status`, read from the app's plans: "Testing the CI branch",
+//! "Merged to CI", "CI failed", "Merged to main") beside the picker and in
+//! its list; the CI run's steps and the battery sbxw asks on the CI branch
+//! are lines among the test rows ([`model::merge_badge`], `model::ci_step`).
+//!
 //! Read only. Acting stays where it is done: the plan dialog (approve,
 //! merge), the Requests panel (answers), a thread's terminal. The Board
 //! links there. It shows only what went through sbxw: the lead's and
