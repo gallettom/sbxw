@@ -20,6 +20,7 @@ const mcpName      = document.getElementById('mcp-name');
 const mcpKind      = document.getElementById('mcp-kind');
 const mcpUrl       = document.getElementById('mcp-url');
 const mcpHeaders   = document.getElementById('mcp-headers');
+const mcpClientId  = document.getElementById('mcp-client-id');
 const mcpSecrets   = document.getElementById('mcp-secrets');
 const mcpCommand   = document.getElementById('mcp-command');
 const mcpArgs      = document.getElementById('mcp-args');
@@ -81,16 +82,40 @@ async function mcpLoad() {
   mcpRenderList();
 }
 
-// The secret fields follow the `${key}` placeholders typed in the headers. On
-// an edit an empty field keeps the stored secret.
-function mcpRenderSecrets() {
+// BEGIN mcp oauth rules
+// The secret fields: each `${key}` placeholder typed in the headers, then the
+// OAuth client secret (key `client_secret`, labelled as such) once a client
+// ID is filled. The daemon refuses a header placeholder of that name.
+function mcpSecretKeys(headers, clientId) {
   const keys = [];
-  for (const m of mcpHeaders.value.matchAll(/\$\{([A-Za-z0-9_-]+)\}/g)) if (!keys.includes(m[1])) keys.push(m[1]);
+  for (const m of String(headers || '').matchAll(/\$\{([A-Za-z0-9_-]+)\}/g)) if (!keys.includes(m[1])) keys.push(m[1]);
+  if (String(clientId || '').trim() && !keys.includes('client_secret')) keys.push('client_secret');
+  return keys;
+}
+
+// The client ID an `mcp ls` row carries, under whichever key sbx uses (not
+// documented: these are guesses, and none found leaves the field empty).
+// Never a secret: only an id is read.
+const MCP_CLIENT_ID_PATHS = ['client_id', 'clientId', 'oauth.client_id', 'oauth.clientId', 'auth.client_id', 'auth.clientId', 'config.client_id'];
+function mcpClientIdOf(detail) {
+  for (const path of MCP_CLIENT_ID_PATHS) {
+    const v = path.split('.').reduce((o, p) => (o && typeof o === 'object' ? o[p] : undefined), detail);
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+// END mcp oauth rules
+
+// On an edit an empty secret field keeps the stored secret.
+function mcpRenderSecrets() {
+  const keys = mcpSecretKeys(mcpHeaders.value, mcpKind.value === 'remote' ? mcpClientId.value : '');
   const kept = Object.fromEntries([...mcpSecrets.querySelectorAll('input')].map(i => [i.dataset.key, i.value]));
+  const client = k => k === 'client_secret' && mcpClientId.value.trim() !== '';
   mcpSecrets.innerHTML = keys.map(k => `<label class="mcp-secret">
-      <code>\${${escHtml(k)}}</code>
+      ${client(k) ? 'OAuth client secret' : `<code>\${${escHtml(k)}}</code>`}
       <input class="field-input" type="password" autocomplete="off" data-key="${escHtml(k)}"
-             placeholder="${mcpEditing ? 'unchanged if left empty' : 'secret value'}" aria-label="Secret ${escHtml(k)}">
+             placeholder="${mcpEditing ? 'unchanged if left empty' : client(k) ? 'only for a confidential client' : 'secret value'}"
+             aria-label="${client(k) ? 'OAuth client secret' : `Secret ${escHtml(k)}`}">
     </label>`).join('');
   for (const i of mcpSecrets.querySelectorAll('input')) i.value = kept[i.dataset.key] || '';
 }
@@ -106,7 +131,7 @@ function mcpResetForm() {
   mcpFormTitle.textContent = 'New server';
   mcpSave.textContent = 'Add';
   mcpCancel.classList.add('hidden');
-  for (const el of [mcpName, mcpUrl, mcpHeaders, mcpCommand, mcpArgs, mcpDir]) el.value = '';
+  for (const el of [mcpName, mcpUrl, mcpHeaders, mcpClientId, mcpCommand, mcpArgs, mcpDir]) el.value = '';
   mcpKind.value = 'remote';
   mcpSecrets.innerHTML = '';
   mcpSyncKind();
@@ -124,6 +149,7 @@ function mcpStartEdit(s) {
   const headers = mcpField(d, 'headers', 'config.headers');
   mcpHeaders.value = Array.isArray(headers) ? headers.join('\n')
     : headers && typeof headers === 'object' ? Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
+  mcpClientId.value = mcpClientIdOf(d);
   mcpCommand.value = mcpField(d, 'command', 'config.command') || '';
   const args = mcpField(d, 'args', 'config.args');
   mcpArgs.value = Array.isArray(args) ? args.join(' ') : (args || '');
@@ -143,6 +169,7 @@ async function mcpSubmit() {
     command: mcpCommand.value.trim(),
     args: mcpArgs.value.trim() ? mcpArgs.value.trim().split(/\s+/) : [],
     dir: mcpDir.value.trim(),
+    client_id: mcpKind.value === 'remote' ? mcpClientId.value.trim() : '',
   };
   if (!spec.name) { showNote(mcpError, 'A server needs a name'); return; }
   if (mcpEditing && !confirm(
@@ -243,7 +270,7 @@ async function openMcpModal() {
 }
 
 function mcpFormDirty() {
-  return [mcpName, mcpUrl, mcpHeaders, mcpCommand, mcpArgs, mcpDir].some(el => el.value.trim());
+  return [mcpName, mcpUrl, mcpHeaders, mcpClientId, mcpCommand, mcpArgs, mcpDir].some(el => el.value.trim());
 }
 
 function closeMcpModal() {
@@ -257,8 +284,9 @@ mcpListEl.addEventListener('click', e => {
   if (btn) mcpRowAction(btn);
 });
 mcpSandbox.addEventListener('change', () => { mcpRenderList(); mcpShowMode(); });
-mcpKind.addEventListener('change', mcpSyncKind);
+mcpKind.addEventListener('change', () => { mcpSyncKind(); mcpRenderSecrets(); });
 mcpHeaders.addEventListener('input', mcpRenderSecrets);
+mcpClientId.addEventListener('input', mcpRenderSecrets);
 mcpSave.addEventListener('click', mcpSubmit);
 mcpCancel.addEventListener('click', () => { mcpResetForm(); showNote(mcpError, ''); });
 

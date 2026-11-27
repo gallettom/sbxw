@@ -34,7 +34,8 @@
 //! sbx stop N
 //! sbx policy log [N] --format json · sbx policy refresh
 //! sbx mcp ls --format json · sbx mcp load|unload SERVER --sandbox N
-//! sbx mcp add NAME --url=U [--header=H]… --skip-auth | --command=C [--args=A,B] [--dir=D]
+//! sbx mcp add NAME --url=U [--header=H]… [--client-id=ID] --skip-auth | --command=C [--args=A,B] [--dir=D]
+//!                                             (a client's secret: `secret set mcp:NAME:client_secret` first)
 //! sbx mcp rm NAME · sbx mcp inspect NAME · sbx mcp auth NAME   (OAuth; opens the host's browser)
 //! sbx template save N TAG                    (--description is cloud-only: refused locally)
 //! sbx template ls · sbx template rm TAG · create --template TAG
@@ -1244,10 +1245,16 @@ impl Sbx {
     }
 
     /// Register an MCP server on the host. The spec is checked here, so a
-    /// bad one never reaches sbx.
+    /// bad one never reaches sbx. A pre-registered OAuth client's secret is
+    /// stored before (`mcp:<name>:client_secret`, sbx reads it at the add).
+    /// sbx asking for a client id gets a line saying what to do, ahead of
+    /// sbx's own words.
     pub async fn mcp_add(&self, spec: &McpSpec) -> Result<()> {
         let args = spec.add_args().map_err(|e| anyhow!(e))?;
-        self.checked(Invocation::new(args)).await.map(drop)
+        self.checked(Invocation::new(args)).await.map(drop).map_err(|e| match sbxw_core::mcp::add_error_hint(spec, &format!("{e:#}")) {
+            Some(hint) => e.context(hint),
+            None => e,
+        })
     }
 
     /// Forget a registered MCP server and its OAuth token. Removals ask for
