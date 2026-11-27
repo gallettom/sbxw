@@ -116,6 +116,12 @@ pub struct Style {
     pub mono: bool,
     pub wrap: bool,
     pub truncate: bool,
+    /// `selectable` (`text`, `markdown`): the person can select it and copy it
+    /// (Rune's `El::selectable`; never an input, never secure text). Off by default.
+    pub selectable: bool,
+    /// `selection_group` (`row`, `column`): the selectable texts inside are one
+    /// selection, a drag crossing from one into the next (`El::selection_group`).
+    pub selection_group: bool,
     /// `pills`: draw `[[Word]]` markers as keyword pills (emphasis.rs):
     /// `Some("")` by the daemon's global switch, `Some(sandbox)` by that
     /// sandbox's (and the app's own preference for it).
@@ -342,8 +348,8 @@ pub enum Positional {
 
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin", "lift"];
-const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate", "pills"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint", "wrap", "keep_focus"];
+const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate", "pills", "selectable"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "on_left", "on_right", "clip", "folds", "shortcuts", "paint", "wrap", "keep_focus", "selection_group"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -364,7 +370,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("select", Kind::Select, Positional::None, &["id", "items", "value", "on", "arg", "placeholder", "disabled", "scope", "switch"]),
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
-    ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg", "pills"]),
+    ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg", "pills", "selectable"]),
     ("textarea", Kind::Textarea, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "disabled", "rows", "tone", "enter", "on_list_key"]),
     ("image", Kind::Image, Positional::None, &["fit"]),
     ("surface", Kind::Surface, Positional::None, &["id"]),
@@ -1118,6 +1124,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "mono" => st.mono = bool_of(v)?,
         "wrap" => st.wrap = bool_of(v)?,
         "truncate" => st.truncate = bool_of(v)?,
+        "selectable" => st.selectable = bool_of(v)?,
+        "selection_group" => st.selection_group = bool_of(v)?,
         // true: the global switch; a sandbox's name: its switch.
         "pills" => {
             st.pills = match v {

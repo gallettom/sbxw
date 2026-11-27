@@ -459,7 +459,7 @@ pub struct Look {
 }
 
 /// One rich text element for `runs`; `on_link(url)` when a link is pressed.
-fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key: &str, on_link: &Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>) -> El {
+fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key: &str, on_link: &Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>, sel: bool) -> El {
     use crate::theme::{c, hex};
     let mut content = String::new();
     let mut spans = vec![];
@@ -505,6 +505,9 @@ fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key:
         }
     }
     let mut e = rune::rich(content, spans).font(crate::theme::prose(size, weight)).color(hex(look.color)).w_full().min_w(0.0).key(key.to_string());
+    if sel {
+        e = e.selectable(true);
+    }
     // A paragraph with pills (and no inline code, whose chips keep their corners): capsules.
     if pilled && !coded {
         e = e.span_radius(crate::emphasis::span_radius(size));
@@ -525,7 +528,7 @@ fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key:
 /// same share of the width (its weight: the longest text in the column, kept
 /// between 6 and 40 characters), so the columns line up, the cells wrap
 /// inside them and the whole is never wider than its container.
-fn table<S: 'static>(head: &[Vec<Run>], rows: &[Vec<Vec<Run>>], look: &Look, key: &str, on_link: &Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>) -> El {
+fn table<S: 'static>(head: &[Vec<Run>], rows: &[Vec<Vec<Run>>], look: &Look, key: &str, on_link: &Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>, sel: bool) -> El {
     use crate::theme::{c, radius};
     let len = |cell: &[Run]| cell.iter().map(|r| r.text.chars().count()).sum::<usize>();
     let weights: Vec<f32> = (0..head.len()).map(|i| std::iter::once(head).chain(rows.iter().map(|r| r.as_slice())).map(|r| len(&r[i])).max().unwrap_or(0).clamp(6, 40) as f32).collect();
@@ -537,7 +540,7 @@ fn table<S: 'static>(head: &[Vec<Run>], rows: &[Vec<Vec<Run>>], look: &Look, key
         }
         for (i, cell) in cells.iter().enumerate() {
             let k = format!("{key}-r{n}-c{i}");
-            let e = if head { rich_runs::<S>(cell, &bright, 600.0, look.size, &k, on_link) } else { rich_runs::<S>(cell, look, 400.0, look.size, &k, on_link) };
+            let e = if head { rich_runs::<S>(cell, &bright, 600.0, look.size, &k, on_link, sel) } else { rich_runs::<S>(cell, look, 400.0, look.size, &k, on_link, sel) };
             r = r.child(col().grow(weights[i]).min_w(0.0).child(e));
         }
         r
@@ -558,6 +561,18 @@ pub fn view<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::
 /// [`view`] of blocks already parsed. Everything but the parse (look, theme,
 /// pills, key, link handler) is read here, on every call.
 pub(crate) fn view_blocks<S: 'static>(blocks: &[Block], look: &Look, key: &str, on_link: Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>) -> El {
+    blocks_el::<S>(blocks, look, key, on_link, false)
+}
+
+/// [`view`] whose text the person can select and copy (`markdown{ selectable
+/// = true }`): every paragraph, heading, list item, table cell and code block
+/// is a selectable text (the list markers are not). No selection group of its
+/// own, so a group around it (a conversation) selects across it.
+pub fn view_selectable<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>) -> El {
+    blocks_el::<S>(&cache::parsed(src), look, key, on_link, true)
+}
+
+fn blocks_el<S: 'static>(blocks: &[Block], look: &Look, key: &str, on_link: Option<std::rc::Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>>, sel: bool) -> El {
     use crate::theme::{c, hex, radius};
     let mut out = col().w_full().min_w(0.0).gap(8.0);
     for (i, b) in blocks.iter().enumerate() {
@@ -570,9 +585,9 @@ pub(crate) fn view_blocks<S: 'static>(blocks: &[Block], look: &Look, key: &str, 
                     3 => 1.0,
                     _ => 0.0,
                 };
-                rich_runs::<S>(runs, &Look { color: crate::theme::color_value("text-bright").unwrap(), size, pills: look.pills.clone() }, 600.0, size, &k, &on_link)
+                rich_runs::<S>(runs, &Look { color: crate::theme::color_value("text-bright").unwrap(), size, pills: look.pills.clone() }, 600.0, size, &k, &on_link, sel)
             }
-            Block::Paragraph(runs) => rich_runs::<S>(runs, look, 400.0, look.size, &k, &on_link),
+            Block::Paragraph(runs) => rich_runs::<S>(runs, look, 400.0, look.size, &k, &on_link, sel),
             Block::List { ordered, start, items } => {
                 let mut l = col().w_full().min_w(0.0).gap(crate::theme::spacing::XXS).key(k.clone());
 
@@ -585,12 +600,12 @@ pub(crate) fn view_blocks<S: 'static>(blocks: &[Block], look: &Look, key: &str, 
                             .items_start()
                             .gap(crate::theme::spacing::INLINE)
                             .child(text(mark).font(crate::theme::prose(look.size, 400.0)).color(c("text-muted")).min_w(if *ordered { 16.0 } else { 8.0 }))
-                            .child(col().grow(1.0).min_w(0.0).child(rich_runs::<S>(it, look, 400.0, look.size, &format!("{k}-i{n}"), &on_link))),
+                            .child(col().grow(1.0).min_w(0.0).child(rich_runs::<S>(it, look, 400.0, look.size, &format!("{k}-i{n}"), &on_link, sel))),
                     );
                 }
                 l
             }
-            Block::Table { head, rows } => table::<S>(head, rows, look, &k, &on_link),
+            Block::Table { head, rows } => table::<S>(head, rows, look, &k, &on_link, sel),
             Block::Code(code) => col()
                 .key(k.clone())
                 .w_full()
@@ -599,7 +614,7 @@ pub(crate) fn view_blocks<S: 'static>(blocks: &[Block], look: &Look, key: &str, 
                 .radius(radius("sm").unwrap())
                 .fill(c("bg"))
                 .border(1.0, c("elevated"))
-                .child(text(code.clone()).font(crate::screen::body((look.size * 0.92).max(12.0), 400.0).mono()).color(hex(look.color)).wrap_anywhere().w_full().min_w(0.0)),
+                .child(text(code.clone()).font(crate::screen::body((look.size * 0.92).max(12.0), 400.0).mono()).color(hex(look.color)).wrap_anywhere().w_full().min_w(0.0).selectable(sel)),
         });
     }
     out

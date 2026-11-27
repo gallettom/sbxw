@@ -89,7 +89,7 @@ local function question_card(d, data)
     row{ gap = 8, w = "full", icon{ "ask", color = "amber" }, text{ "Asks you", weight = "semibold", color = "amber" }, spacer{},
       #q.steps > 1 and text{ #q.steps .. " questions", size = "sm", color = "text-muted" } or false } }
   for si, st in ipairs(q.steps) do
-    local qk = { gap = 8, w = "full", text{ st.text, wrap = true, color = "text-bright", pills = d.sandbox } }
+    local qk = { gap = 8, w = "full", text{ st.text, wrap = true, color = "text-bright", pills = d.sandbox, selectable = true } }
     for i, o in ipairs(st.options) do
       local picked = picks[si] == i
       qk[#qk + 1] = row{ gap = 8, w = "full", align = "start",
@@ -97,7 +97,7 @@ local function question_card(d, data)
           tone = "amber", variant = picked and "primary" or nil, icon = picked and "check" or nil, busy = picked and sending ~= nil, disabled = sending ~= nil and not picked,
           help = "Answers with this option, the Requests panel's way" }
           or text{ i .. ". " .. o.label, color = "text", wrap = true },
-        o.desc and text{ o.desc, size = "sm", wrap = true, color = "text-muted", grow = 1 } or false }
+        o.desc and text{ o.desc, size = "sm", wrap = true, color = "text-muted", grow = 1, selectable = true } or false }
     end
     kids[#kids + 1] = column(qk)
   end
@@ -116,7 +116,7 @@ end
 local function permission_card(d)
   return column{ gap = 8, pad = 12, radius = "md", fill = "amber-tint", border = "amber", w = "full", key = "monitor-permission",
     row{ gap = 8, icon{ "warning", color = "amber" }, text{ "Wants your permission", weight = "semibold", color = "amber" } },
-    text{ d.permission, wrap = true, color = "text-bright" },
+    text{ d.permission, wrap = true, color = "text-bright", selectable = true },
     text{ "sbxw does not see the command it asks about. Read it, and answer, in its terminal.", size = "sm", wrap = true, color = "text-muted" },
     row{ button{ "Open its terminal", key = "monitor-permission-terminal", icon = "terminal", tone = "green", on = "link", arg = { name = "monitor_terminal", key = d.key } } } }
 end
@@ -126,17 +126,17 @@ end
 local function summary(d, now, kids)
   if d.last_input then
     kids[#kids + 1] = bubble("You", "prompt", "text-muted", nil,
-      column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, text{ d.last_input, wrap = true, color = "text-bright" } }, true)
+      column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, text{ d.last_input, wrap = true, color = "text-bright", selectable = true } }, true)
   end
   if d.from then
     -- Another session's message (or the harness's): its words as data, quietly; never "You".
     kids[#kids + 1] = bubble("From " .. d.from.name, "people", "text-muted", nil,
       column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", key = "monitor-from",
-        text{ d.from.text ~= "" and d.from.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } })
+        text{ d.from.text ~= "" and d.from.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted", selectable = true } })
   end
   if d.reply then
     kids[#kids + 1] = bubble("Claude", "sparkle", "vendor-anthropic", text{ "· last reply, " .. ago(d.ts, now), size = "sm", color = "text-muted" },
-      column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = 720, key = "monitor-reply", markdown{ d.reply, pills = d.sandbox } })
+      column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = 720, key = "monitor-reply", markdown{ d.reply, pills = d.sandbox, selectable = true } })
   end
 end
 
@@ -149,7 +149,7 @@ local STATUS = { ok = { "check", "green", "done" }, error = { "warning", "red", 
 
 local function quiet_line(key, ic, t)
   return row{ key = key, gap = 8, w = "full", justify = "center", py = 4,
-    icon{ ic, size = 12, color = "text-muted" }, text{ t, size = "sm", color = "text-muted", wrap = true, max_w = 560 } }
+    icon{ ic, size = 12, color = "text-muted" }, text{ t, size = "sm", color = "text-muted", wrap = true, max_w = 560, selectable = true } }
 end
 
 -- One step: its tool's icon, the one-line summary, the result's size, a
@@ -161,20 +161,20 @@ local function step_row(st, skey, nested)
     help = st.has_head and (st.open and "Hide its output" or "Show the start of its output") or nil,
     nested and column{ w = 16, h = 1 } or false,
     icon{ st.icon, size = 12, color = "text-muted" },
-    text{ st.summary, size = "sm", mono = true, color = "text", truncate = true, grow = 1 },
+    text{ st.summary, size = "sm", mono = true, color = "text", truncate = true, grow = 1, selectable = true },
     st.size and text{ st.size, size = "sm", color = "text-muted" } or false,
     icon{ m[1], size = 12, color = m[2], help = m[3] } }
   if not (st.open and st.head) then return head end
   return column{ gap = 4, w = "full", head,
     column{ key = "monitor-out-" .. st.id, px = 12, py = 8, radius = "sm", fill = "floor", w = "full",
-      text{ st.head, mono = true, size = "sm", color = "text-muted", wrap = true } } }
+      text{ st.head, mono = true, size = "sm", color = "text-muted", wrap = true, selectable = true } } }
 end
 
 local function conv_row(r, d, now)
   if r.t == "day" then
     return row{ gap = 8, w = "full", py = 4, key = "monitor-" .. r.id, column{ grow = 1, h = 1, fill = "elevated" }, text{ r.label, size = "xs", color = "text-muted" }, column{ grow = 1, h = 1, fill = "elevated" } }
   elseif r.t == "you" then
-    local body = { pad = 12, gap = 8, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright" } }
+    local body = { pad = 12, gap = 8, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright", selectable = true } }
     -- The pictures the person sent in it (the Rust reads only these): small, no action of their own.
     if r.pics and #r.pics > 0 then
       local pics = { gap = 8, wrap = true, key = "monitor-pics-" .. r.id }
@@ -189,7 +189,7 @@ local function conv_row(r, d, now)
   elseif r.t == "from" then
     -- Typed in by another session or the harness: quiet, never "You".
     local kids = { pad = 12, gap = 4, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full",
-      text{ r.text ~= "" and r.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted" } }
+      text{ r.text ~= "" and r.text or "A message from another session.", wrap = true, size = "sm", color = "text-muted", selectable = true } }
     if r.long then
       kids[#kids + 1] = row{ button{ r.open and "Show less" or "Show all", key = "monitor-fold-" .. r.id, variant = "ghost", dense = true, on = "expand", arg = { key = d.key, id = r.id } } }
     end
@@ -198,7 +198,7 @@ local function conv_row(r, d, now)
   elseif r.t == "claude" then
     return column{ key = "monitor-claude-" .. r.id, w = "full",
       bubble("Claude", "sparkle", "vendor-anthropic", text{ "· " .. ago(r.at, now), size = "sm", color = "text-muted" },
-        column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = BW, key = "monitor-body-claude-" .. r.id, markdown{ r.text, pills = d.sandbox } }) }
+        column{ pad = 12, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full", max_w = BW, key = "monitor-body-claude-" .. r.id, markdown{ r.text, pills = d.sandbox, selectable = true } }) }
   elseif r.t == "step" then
     return step_row(r, d.key)
   elseif r.t == "group" then
@@ -210,7 +210,7 @@ local function conv_row(r, d, now)
         icon{ r.open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
         text{ label, size = "sm", weight = "medium", color = "text" },
         icon{ r.icon, size = 12, color = "text-muted" },
-        text{ r.summary, size = "sm", mono = true, color = "text-muted", truncate = true, grow = 1 },
+        text{ r.summary, size = "sm", mono = true, color = "text-muted", truncate = true, grow = 1, selectable = true },
         icon{ m[1], size = 12, color = m[2], help = m[3] } } }
     if r.open then
       for _, st in ipairs(r.steps or {}) do kids[#kids + 1] = step_row(st, d.key, true) end
@@ -226,7 +226,8 @@ end
 -- is pressed it stops following until the next selection: opening a block
 -- near the end would otherwise slide everything above it up.
 local function feed(d, now, data, stick)
-  local kids = { gap = 12, px = 24, py = 16, w = "full" }
+  -- One selection across the conversation's texts: a drag runs across rows.
+  local kids = { gap = 12, px = 24, py = 16, w = "full", selection_group = true }
   local c = d.conv
   local seen = {}
   if c and (c.state == "ready" or c.state == "missing") and c.rows then

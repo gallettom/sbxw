@@ -165,6 +165,7 @@ Text. Positional: the string (a number is shown as its digits).
 | `wrap` | bool | false: one line. A wrapped text is a sentence or more: it is set in the prose face (Inter, bundled by Rune), as Markdown and the core dialogs' sentences are; `SBXW_DESKTOP_PROSE=mono` keeps everything monospace |
 | `truncate` | bool | false. One line cut with an ellipsis when it does not fit (give it `grow = 1` in a row) |
 | `pills` | `true` or a sandbox name | none. Keyword pills: each `[[Word]]` or `[[Word: detail]]` in the string is drawn as a calm capsule (the brackets dropped, regular weight, the word in the body text tinted toward its tone, the detail in the body text, on a faint tint of the tone), wrapping with the text, when the daemon's `[emphasis]` switch is on (`true`: the global switch; a sandbox's name: that sandbox's, and the app's own preference for it). Use it for words an agent wrote. See [Keyword pills](#keyword-pills) |
+| `selectable` | bool | false. The person can select the text and copy it (drag, double or triple click, Cmd+C; Ctrl+C off macOS), as read-only text: an I-beam, no Tab stop, a press elsewhere clears it. Inside a pressable row a click still presses the row; a drag selects without pressing. Never on an input (a secure field cannot be selected). Also on `markdown` |
 
 Sizes under 12 are drawn at 12 (nothing a person reads is smaller); a
 `weight` of `bold` is drawn semibold (600).
@@ -192,6 +193,7 @@ Children side by side. Children are centred vertically.
 | `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
 | `selected` | bool | With `on`: the selected item (screen readers say so) |
 | `keep_focus` | bool | With `on`: a press leaves the keyboard focus where it is (the rows of a completion list, under a field that keeps the keyboard) |
+| `selection_group` | bool | false. The `selectable` texts inside are one selection, in order: a drag crosses from one into the next, Cmd+C copies them joined by new lines (Sessions' conversation) |
 | `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
 | `shortcuts` | list of `{ what, key, ... }` | Lines under its `help` in the tooltip, each what a key does with its keycaps: `shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } }` |
 | `paint` | `{ strokes = { { points = { x1, y1, x2, y2, ... }, width = 2, color = "blue" } }, dots = { { x =, y =, r =, color =, hollow = } } }` | Vector drawing in the element's own points from its top-left, under its children (Rune's `Shape`: round-capped polylines, dots as filled discs or rings). At most 400 strokes, 600 dots, 8000 points. Give the element its `w` and `h`; put pressable parts over it as `pin`ned children. The Worktrees graph draws with it |
@@ -738,6 +740,7 @@ links (any other link shows its label as text). Positional: the string.
 | `on` | action name | Called when a link is pressed; `value` = its URL. Without `on`, links are drawn but do nothing |
 | `arg` | any value | Passed too |
 | `pills` | `true` or a sandbox name | Keyword pills in its prose (not in code, links, bold or italics), as `text`'s `pills` |
+| `selectable` | bool | false. Its paragraphs, headings, list items, table cells and code blocks can be selected and copied, as `text`'s `selectable` (the list markers cannot); no selection group of its own, so a `selection_group` around it selects across it |
 
 ```lua
 markdown{ "Run **`sbxw up`** first, then see [the docs](https://example.org/sbxw).", on = "link" }
