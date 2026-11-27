@@ -223,6 +223,8 @@ pub struct Model {
     pub conv: super::conv::Store,
     /// The composer's completion list, for one sandbox ([`super::cmds`]).
     pub cmds: Option<super::cmds::Cmds>,
+    /// Previews of the pictures the person sent to the session followed ([`super::pics`]).
+    pub pics: super::pics::Pics,
 }
 
 /// The rail's Team leads, applied to Sessions: the core's one state

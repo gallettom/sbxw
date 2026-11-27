@@ -52,6 +52,8 @@ pub struct Att {
     pub look: Vec<String>,
     /// Uploaded by a send that stopped later: the daemon's path, kept for the next one.
     pub uploaded: Option<String>,
+    /// A pasted picture's thumbnail, shown under this key (`Action::Image`) until it goes.
+    pub thumb: Option<String>,
 }
 
 impl Att {
@@ -63,11 +65,11 @@ impl Att {
         }
         let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "upload".into());
         let look = drops::guardrails(std::slice::from_ref(&p), 1);
-        Ok(Att { id, name, size: m.len(), payload: Payload::Path(p), look, uploaded: None })
+        Ok(Att { id, name, size: m.len(), payload: Payload::Path(p), look, uploaded: None, thumb: None })
     }
 
     pub fn of_png(id: u64, n: u64, bytes: Vec<u8>) -> Att {
-        Att { id, name: format!("pasted-{n}.png"), size: bytes.len() as u64, payload: Payload::Png(bytes), look: vec![], uploaded: None }
+        Att { id, name: format!("pasted-{n}.png"), size: bytes.len() as u64, payload: Payload::Png(bytes), look: vec![], uploaded: None, thumb: None }
     }
 
     /// Why it cannot be sent at all, if so (the Files view's rule).
@@ -94,6 +96,25 @@ impl Att {
     pub fn tag(&self) -> String {
         format!("monitor-up-{}", self.id)
     }
+
+    /// A pasted picture's thumbnail, decoded from the bytes already in
+    /// memory (never from a local path): kept under `thumb`, shown by the
+    /// action returned. A picture that does not decode keeps its plain chip.
+    pub fn show_thumb(&mut self) -> Option<crate::feat::Action> {
+        let Payload::Png(b) = &self.payload else { return None };
+        let p = crate::picture::prepare(b, crate::picture::Limits::default(), Some(THUMB_FIT), crate::picture::Encode::Png).ok()?;
+        let key = format!("monitor-chip-pic-{}", self.id);
+        self.thumb = Some(key.clone());
+        Some(crate::feat::Action::Image { key, bytes: p.bytes })
+    }
+}
+
+/// A chip thumbnail's longest side once decoded (twice the drawn size).
+pub const THUMB_FIT: u32 = 96;
+
+/// The thumbnails of files that go (removed, or sent), forgotten.
+pub fn unshow(files: &[Att]) -> Vec<crate::feat::Action> {
+    files.iter().filter_map(|f| f.thumb.clone().map(|key| crate::feat::Action::Image { key, bytes: vec![] })).collect()
 }
 
 /// Characters a name may hold that would change how the line around it
@@ -158,7 +179,7 @@ pub fn chips(files: &[Att], uploads: &J, sending: bool) -> J {
             _ => 0.0,
         };
         json!({ "id": a.id, "name": clipped(&a.name), "size": fview::size_label(a.size), "state": state, "why": why,
-            "sending": (sending || u["state"] == "sending") && a.uploaded.is_none(), "progress": progress })
+            "sending": (sending || u["state"] == "sending") && a.uploaded.is_none(), "progress": progress, "img": a.thumb })
     }).collect())
 }
 

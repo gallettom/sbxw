@@ -174,9 +174,18 @@ local function conv_row(r, d, now)
   if r.t == "day" then
     return row{ gap = 8, w = "full", py = 4, key = "monitor-" .. r.id, column{ grow = 1, h = 1, fill = "elevated" }, text{ r.label, size = "xs", color = "text-muted" }, column{ grow = 1, h = 1, fill = "elevated" } }
   elseif r.t == "you" then
+    local body = { pad = 12, gap = 8, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright" } }
+    -- The pictures the person sent in it (the Rust reads only these): small, no action of their own.
+    if r.pics and #r.pics > 0 then
+      local pics = { gap = 8, wrap = true, key = "monitor-pics-" .. r.id }
+      for i, p in ipairs(r.pics) do
+        pics[#pics + 1] = p.key and image{ key = p.key, max_w = math.min(180, BW - 24), max_h = 120 }
+          or text{ p.note, key = "monitor-pic-note-" .. r.id .. "-" .. i, size = "sm", color = "text-muted", wrap = true }
+      end
+      body[#body + 1] = row(pics)
+    end
     return column{ key = "monitor-you-" .. r.id, w = "full",
-      bubble("You", "prompt", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-muted" },
-        column{ pad = 12, radius = "md", fill = "bubble-you", border = "bubble-you-edge", max_w = BW, key = "monitor-body-you-" .. r.id, text{ r.text, wrap = true, color = "text-bright" } }, true) }
+      bubble("You", "prompt", "text-muted", text{ "· " .. ago(r.at, now), size = "sm", color = "text-muted" }, column(body), true) }
   elseif r.t == "from" then
     -- Typed in by another session or the harness: quiet, never "You".
     local kids = { pad = 12, gap = 4, radius = "md", fill = "bubble-agent", border = "bubble-agent-edge", w = "full",
@@ -295,8 +304,8 @@ local function chips(d)
   for _, f in ipairs(files) do
     local tone = f.state == "refused" and "red" or f.state == "look" and "amber" or f.state == "uploaded" and "green" or "text-muted"
     local ic = f.state == "refused" and "close" or f.state == "look" and "shield" or f.state == "uploaded" and "check" or "file"
-    kids[#kids + 1] = row{ gap = 4, px = 8, h = 24, radius = "sm", border = f.state == "ok" and "elevated" or tone, key = "monitor-file-" .. f.id, help = f.why,
-      icon{ ic, size = 12, color = tone },
+    kids[#kids + 1] = row{ gap = 4, px = 8, h = f.img and 40 or 24, radius = "sm", border = f.state == "ok" and "elevated" or tone, key = "monitor-file-" .. f.id, help = f.why,
+      f.img and image{ key = f.img, max_w = 48, max_h = 32 } or icon{ ic, size = 12, color = tone },
       text{ f.name, size = "sm", color = "text", truncate = true, max_w = 260 },
       text{ f.sending and string.format("%d%%", math.floor((f.progress or 0) * 100)) or f.size, size = "sm", color = "text-muted" },
       button{ icon = "close", key = "monitor-file-remove-" .. f.id, variant = "ghost", dense = true, on = "unattach", arg = { key = d.key, id = f.id },
