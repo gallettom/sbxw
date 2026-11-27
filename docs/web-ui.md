@@ -33,7 +33,7 @@ A paired phone has its own reduced page, over your tailnet: see
 | Area | What's there |
 |---|---|
 | **Header** | The terminal-count switch (1 to several panes), the terminal colour picker, the [**Kanban**](#the-kanban) button, for the background, the bar above it and the text (kept in this browser; the defaults come from [`terminal_color`, `terminal_bar_color` and `terminal_text_color`](configuration.md)), the relay badge when an agent's question waits for you, and your **Claude subscription usage** |
-| **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder (and first by host, when [remote hosts](#remote-hosts-experimental) are registered). Chat sandboxes go under **💬 Chats**. In each group, and among the sandboxes outside any group, the ones on screen come first, in pane order. A sandbox's [threads](threads-and-lead.md) are listed under its row. Clicking a row opens it in the focused pane; a row that is in no pane has a **+** at its top right, which opens it in the first empty pane, or adds a pane for it |
+| **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder (and first by host, when [remote hosts](#remote-hosts-experimental) are registered). Chat sandboxes go under **💬 Chats**. In each group, and among the sandboxes outside any group, the ones on screen come first, in pane order. A sandbox's [threads](threads-and-lead.md) are listed under its row. Clicking a row opens it in the focused pane, or, when it is already in another pane, focuses that pane (see [the focused pane](#the-focused-pane-and-its-row)); a row that is in no pane has a **+** at its top right, which opens it in the first empty pane, or adds a pane for it |
 | **Panes** | One terminal each. A sandbox's panes sit next to each other in a shared colour |
 | **Bottom right** | Background-job cards (bring-ups, code maps, relay requests) and the [chat dock](chat.md#the-chat-dock) button |
 
@@ -59,6 +59,38 @@ never answers on its own.
 as Claude Code's `/usage`. They turn amber at 75% and red at 90%. They are
 hidden with API-key auth, which has no subscription windows. How they're
 collected is in [Dynamic Island](island.md#subscription-usage).
+
+### The focused pane and its row
+
+The focused pane and the sidebar row of what it shows are highlighted
+together, in one colour: the pane's group colour when its sandbox is in
+several panes, the focus blue otherwise.
+
+- **The pane** has a 2px ring in that colour, and its bar's underline.
+- **The row** has a faint tint of it and a 1px ring inside. Its left edge
+  keeps the workspace group's hue. When the sessions under the row are
+  unfolded, the session in the pane (main or a thread) is tinted too, with a
+  bar of the colour on its left.
+- **Clicking a row** marks the pane that shows it with one short pulse of
+  the colour. A sandbox already in another pane: that pane becomes the
+  focused one and nothing is opened. A sandbox in no pane opens in the
+  focused pane, as before. With *reduce motion* set, there is no pulse; the
+  ring says it.
+- Both come from one record, the focused pane: clicking in a pane moves the
+  row's highlight, clicking a row moves the pane's.
+
+What each kind of pane shows:
+
+| In the focused pane | Pane | Row |
+|---|---|---|
+| A sandbox (one pane) | Ring in blue | Its row, in blue |
+| A sandbox in several panes | Ring in the group colour | Its row, in the group colour; the row's click leads to its main session's pane |
+| A thread | Ring in the group colour (blue if alone) | Its sandbox's row, and the thread's session row when unfolded |
+| A chat | Ring in blue | Its row under **💬 Chats** |
+| Nothing, or the host monitor | Ring in blue | No row |
+
+The rule is `focusHighlight` and `rowClickTarget` in `assets/js/panes.js`,
+tested in `tests/js/pane-highlight.test.mjs`.
 
 ## Creating sandboxes
 

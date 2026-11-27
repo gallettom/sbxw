@@ -608,15 +608,49 @@ function recreatePaneTerminal(idx) {
 }
 
 function setFocusedPane(idx) {
-  panes.forEach((p, i) => p.el.classList.toggle('focused', i === idx));
   focusedPane = idx;
-  const focusedSandbox = panes[idx]?.sandbox;
-  listEl.querySelectorAll('.sbx-item').forEach(row =>
-    row.classList.toggle('focused', !!focusedSandbox && row.dataset.name === focusedSandbox));
+  applyFocusHighlight();
   panes[idx]?.term.focus();
   // Which sandbox is being read decides whether its `attention` liseret shows
   // at all, on this pane, and on its sidebar row.
   applyAgentStates();
+}
+
+// Both highlights, painted from focusedPane alone (focusHighlight): the
+// focused pane's ring and the `focused` class and colour of its sidebar row
+// and session row. Called wherever either side can change: focus, a pane's
+// content, a sidebar rebuild, a group's colour. Classes and one custom
+// property only; a row is found by its data attributes, compared as strings.
+function applyFocusHighlight() {
+  const h = focusHighlight(panes.slice(0, paneCount), focusedPane);
+  panes.forEach((p, i) => {
+    p.el.classList.toggle('focused', i === h.pane);
+    if (i === h.pane) p.el.style.setProperty('--pane-color', h.color);
+    else p.el.style.removeProperty('--pane-color');
+  });
+  listEl.querySelectorAll('.sbx-item').forEach(row => {
+    const on = h.row !== null && row.dataset.name === h.row;
+    row.classList.toggle('focused', on);
+    if (on) row.style.setProperty('--pane-color', h.color);
+    else row.style.removeProperty('--pane-color');
+  });
+  listEl.querySelectorAll('.sbx-thread').forEach(b => {
+    const on = h.row !== null && b.dataset.sandbox === h.row
+      && (h.thread === null ? b.hasAttribute('data-main') : b.dataset.thread === h.thread);
+    b.classList.toggle('focused', on);
+  });
+}
+
+// The pane a sidebar click landed on, made to catch the eye: one short pulse
+// of its colour (none under prefers-reduced-motion, where its focused ring
+// says it alone). Restarted on a second click.
+function flashPane(idx) {
+  const el = panes[idx]?.el;
+  if (!el) return;
+  el.classList.remove('flash');
+  void el.offsetWidth;
+  el.classList.add('flash');
+  el.addEventListener('animationend', () => el.classList.remove('flash'), { once: true });
 }
 
 function setPaneMode(idx, mode, save = true) {
@@ -933,6 +967,8 @@ function handlePaneData(pane, ev) {
   }
 }
 
+// BEGIN pane highlight pure: no DOM; tests/js/pane-highlight.test.mjs runs it
+// (with MONITOR_SANDBOX given).
 // Which mode a pane must use when connecting to `name`, given what the caller
 // asked for and what the pane is showing now.
 //
@@ -962,6 +998,49 @@ function sessionIdentity(sandbox, mode, thread) {
   if (mode === 'kit-add') return `${sandbox}::kit-add`;
   return thread ? `${sandbox}::thread:${thread}` : `${sandbox}::main`;
 }
+
+// What `connectPane(idx, name, mode, thread)` puts in a pane showing `cur`:
+// the mode and the thread. Reconnect and ↻ pass the mode alone, so the
+// thread is the one already there; Bash keeps it too (a thread's Bash is a
+// shell in its worktree). A thread mode with no thread is no target (null).
+function connectTarget(cur, name, mode, thread) {
+  const nextMode = paneModeFor(name, mode, cur?.mode);
+  const nextThread = nextMode === 'thread' || nextMode === 'bash'
+    ? (thread || (name === cur?.sandbox ? cur?.thread : null)) || null
+    : null;
+  if (nextMode === 'thread' && !nextThread) return null;
+  return { mode: nextMode, thread: nextThread };
+}
+
+// The focused pane, seen from both sides. `vis` is the visible panes
+// ({ sandbox, mode, thread, groupColor }), `focused` the one index sbxw keeps
+// for focus (focusedPane). Both highlights are read from this, never kept
+// apart: `pane` is the pane to mark, `row` the sidebar row of the sandbox it
+// shows, `thread` the session row under it (null: the main session), and
+// `color` the pane's own colour: its group's hue when its sandbox is in
+// several panes (paintGroups), else the focus blue every focused pane had.
+// An empty pane and the host monitor have no row.
+const PANE_FOCUS_COLOR = 'var(--c-focus)';
+function focusHighlight(vis, focused) {
+  const p = vis[focused];
+  if (!p) return { pane: -1, row: null, thread: null, color: PANE_FOCUS_COLOR };
+  const color = p.groupColor || PANE_FOCUS_COLOR;
+  if (!p.sandbox || p.mode === 'monitor' || p.sandbox === MONITOR_SANDBOX) return { pane: focused, row: null, thread: null, color };
+  return { pane: focused, row: p.sandbox, thread: p.mode === 'thread' || p.mode === 'bash' ? p.thread || null : null, color };
+}
+
+// A click on the row of `name` (not on one of its buttons) connects it to the
+// focused pane. When the session it would open is already in another visible
+// pane, connectPane refuses (one session, one pane): that pane is the one to
+// focus and mark instead, and nothing is opened. Otherwise the focused pane
+// takes it, as it always did, and is the one marked.
+function rowClickTarget(vis, focused, name) {
+  const t = connectTarget(vis[focused], name);
+  const id = t && sessionIdentity(name, t.mode, t.thread);
+  const at = id ? vis.findIndex((p, i) => i !== focused && sessionIdentity(p.sandbox, p.mode, p.thread) === id) : -1;
+  return at >= 0 ? { pane: at, connect: false } : { pane: focused, connect: true };
+}
+// END pane highlight pure
 
 // The pane bar as it depends on *what* a pane holds rather than on which
 // sandbox: its title, and the buttons that need a sandbox behind them. An empty
@@ -1056,13 +1135,9 @@ function emptyPane(idx) {
 function connectPane(idx, name, mode, thread, repo, model, checkout) {
   if (!name || idx >= panes.length) return;
   const pane = panes[idx];
-  const nextMode = paneModeFor(name, mode, pane.mode);
-  // Reconnect and ↻ pass the mode alone; the thread is the one already here.
-  // Bash keeps it too: a thread's Bash is a shell in its worktree.
-  const nextThread = nextMode === 'thread' || nextMode === 'bash'
-    ? (thread || (name === pane.sandbox ? pane.thread : null))
-    : null;
-  if (nextMode === 'thread' && !nextThread) return;
+  const target = connectTarget(pane, name, mode, thread);
+  if (!target) return;
+  const { mode: nextMode, thread: nextThread } = target;
   // Refuse to duplicate a session already open in a different visible pane.
   const id = sessionIdentity(name, nextMode, nextThread);
   if (panes.slice(0, paneCount).some((p, i) => i !== idx && sessionIdentity(p.sandbox, p.mode, p.thread) === id)) return;
@@ -1707,6 +1782,8 @@ function renderThreadViews() {
     setHtml(box, sidebarSessionsHtml(sandbox));
   });
   if (sessionMenu.idx != null) renderSessionMenu();
+  // The session rows were maybe rebuilt just now, without their highlight.
+  applyFocusHighlight();
 }
 
 // The main session first, as `null`, then the sessions in its checkout, then
@@ -2273,6 +2350,7 @@ function paintGroups() {
   panes.forEach((p, i) => {
     p.el.classList.remove('grouped', 'edge-t', 'edge-r', 'edge-b', 'edge-l');
     const color = i < paneCount ? colorOf.get(p.sandbox) : null;
+    p.groupColor = color || null;
     // A thread always names itself; the agent says "main" only when it has a
     // thread on screen to be told apart from.
     const chip = document.getElementById(`prole-${i}`);
@@ -2315,4 +2393,6 @@ function paintGroups() {
     if (!mates.some(q => near(q.right, r.left) && acrossY(q))) p.el.classList.add('edge-l');
     if (!mates.some(q => near(q.left, r.right) && acrossY(q))) p.el.classList.add('edge-r');
   });
+  // A group's hue is the focused pane's colour: its row follows it.
+  applyFocusHighlight();
 }

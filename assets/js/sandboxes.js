@@ -338,8 +338,9 @@ function sandboxItemHtml(s, groupColor) {
     ? `<button class="sbx-pane-add" data-action="open-pane" data-name="${escHtml(s.name)}" title="Open in an empty pane, or in a new one" aria-label="Open ${escHtml(s.name)} in another pane">+</button>`
     : '';
   // The sandbox in the focused pane (the one being worked on) keeps its
-  // row's buttons out without a hover (see "Row actions, on demand").
-  const isFocused = panes[focusedPane]?.sandbox === s.name;
+  // row's buttons out without a hover (see "Row actions, on demand"), and is
+  // highlighted in that pane's colour (applyFocusHighlight sets the colour).
+  const isFocused = focusHighlight(panes.slice(0, paneCount), focusedPane).row === s.name;
   const isRunning = s.status === 'running';
   const readyDot = readySandboxes.has(s.name) ? '<span class="sbx-ready-dot" title="Ready"></span>' : '';
   // A map being written is the one thing an agent does *for* a sandbox that
@@ -416,6 +417,7 @@ function renderSidebar() {
   if (sidebarByHost()) {
     listEl.innerHTML = renderHostSections();
     applyAgentStates();
+    applyFocusHighlight();
     return;
   }
   if (!sandboxes.length) {
@@ -445,6 +447,8 @@ function renderSidebar() {
   // repaint them from the live session state rather than baking it into the
   // HTML, so an event arriving between two renders still lands.
   applyAgentStates();
+  // And the focused pane's colour on its row, from the same one record.
+  applyFocusHighlight();
 }
 
 // The workspace and chat cards for `list`: the whole sidebar on one machine,
@@ -497,7 +501,8 @@ listEl.addEventListener('click', e => {
   if (fold) { setSessionsOpen(fold.dataset.sandbox, !sessionsOpen(fold.dataset.sandbox)); return; }
   // A session row reaches that session (shown and focused), not its sandbox.
   const threadRow = e.target.closest('.sbx-thread');
-  if (threadRow) { reachSession(threadRow.dataset.sandbox, threadRow.dataset.thread || null); return; }
+  // Wherever it lands is the focused pane after, and is marked.
+  if (threadRow) { reachSession(threadRow.dataset.sandbox, threadRow.dataset.thread || null); flashPane(focusedPane); return; }
   const btn = e.target.closest('button[data-action]');
   const item = e.target.closest('.sbx-item');
   if (!item) return;
@@ -522,7 +527,13 @@ listEl.addEventListener('click', e => {
     // One kit per pane: sbx asks, the person answers; the next ✓ takes the next.
     if (action === 'kit-add')   connectPane(focusedPane, name, 'kit-add');
   } else {
-    connectPane(focusedPane, name);
+    // Already in another pane: that pane is focused and marked, nothing is
+    // opened (connectPane would refuse the duplicate). Otherwise the focused
+    // pane takes it, as before, and is the one marked.
+    const to = rowClickTarget(panes.slice(0, paneCount), focusedPane, name);
+    if (to.connect) connectPane(focusedPane, name);
+    else setFocusedPane(to.pane);
+    flashPane(to.pane);
   }
 });
 
