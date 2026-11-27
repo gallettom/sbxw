@@ -3110,3 +3110,141 @@ fn words_alone_go_only_from_the_person_s_press_through_the_app() {
     let typed = rt.state.screens.iter().find(|x| x.name == "monitor").and_then(|sc| sc.ui.edits.get("monitor-compose").map(|e| e.0.text.clone()));
     assert_eq!(typed.as_deref().unwrap_or(""), "", "the box is empty");
 }
+
+// ---- Selecting and copying the conversation's text ----
+
+#[test]
+fn the_selection_props_parse_off_by_default_and_never_on_an_input() {
+    let mut h = LuauHost::new(Limits::default()).unwrap();
+    h.load("t", "return { render = function(s, d) return column{ key = 'g', selection_group = true, text{ 'a', key = 'a', selectable = true }, markdown{ 'b', key = 'b', selectable = true }, text{ 'c', key = 'c' }, row{ key = 'r' } } end }").unwrap();
+    let n = h.render(&json!({})).unwrap();
+    assert!(find(&n, "g").unwrap().style.selection_group);
+    assert!(find(&n, "a").unwrap().style.selectable && find(&n, "b").unwrap().style.selectable);
+    assert!(!find(&n, "c").unwrap().style.selectable, "off by default");
+    assert!(!find(&n, "r").unwrap().style.selection_group, "off by default");
+    // An input (secure or not) takes no `selectable`: the screen's error, nothing drawn.
+    let mut h = LuauHost::new(Limits::default()).unwrap();
+    h.load("t", "return { render = function(s, d) return input{ id = 'pw', secure = true, selectable = true } end }").unwrap();
+    assert!(h.render(&json!({})).is_err());
+    // Sessions: the conversation's texts are selectable, its controls and the composer are not.
+    let (d, _) = on_session("billing-api:s-bill-main");
+    let n = host().render(&d).unwrap();
+    let mut all = vec![];
+    walk(&n, &mut all);
+    assert!(all.iter().any(|x| x.style.selection_group && x.children.iter().any(|c| c.key.as_deref().is_some_and(|k| k.starts_with("monitor-you-")))), "one selection across the rows");
+    for x in &all {
+        if x.style.selectable {
+            assert!(matches!(x.kind, crate::luau::Kind::Text | crate::luau::Kind::Markdown), "{:?}", x.kind);
+        }
+    }
+    let sel_in = |key: &str| {
+        let mut v = vec![];
+        walk(find(&n, key).unwrap_or_else(|| panic!("{key}")), &mut v);
+        v.iter().any(|x| x.style.selectable)
+    };
+    assert!(!sel_in("monitor-list-col"), "the session list is not");
+    assert!(!sel_in("monitor-send") && !sel_in("monitor-compose"), "nor the composer");
+    let you = first_you(&d["monitor"]);
+    assert!(sel_in(&format!("monitor-you-{}", you["id"].as_str().unwrap())));
+}
+
+/// Through the App: a drag from the person's prompt into Claude's reply
+/// selects across the two rows and Cmd+C copies the text drawn, joined by a
+/// new line; with no selection Cmd+C copies nothing. A drag on a step's
+/// text selects without folding; a plain click still folds.
+#[test]
+fn a_drag_selects_across_the_conversation_and_cmd_c_copies_it() {
+    use crate::shell::{view as shell_view, App};
+    use rune::{Key, KeyEvent};
+    let mut fx = fixture("basic");
+    fx["daemon"]["history"]["billing-api/s-bill-main"] = json!({ "items": [
+        it(1, "user_prompt", json!({ "text": "Alpha words from you" })),
+        it(2, "assistant_text", json!({ "text": "Beta reply from Claude" })),
+        it(3, "tool_call", json!({ "tool": { "name": "Bash", "summary": "$ cargo test the whole thing", "id": "t1" } })),
+        it(4, "tool_result", json!({ "result": { "status": "ok", "size": 40, "head": "Gamma output line", "id": "t1" } })),
+        it(5, "assistant_text", json!({ "text": "Done." })),
+    ] });
+    let path = std::env::temp_dir().join(format!("sbxw-sessions-select-{}.json", std::process::id()));
+    std::fs::write(&path, serde_json::to_string(&fx).unwrap()).unwrap();
+    let a = App::new(crate::shell::Args { fixture: Some(path.to_string_lossy().into()), ..Default::default() });
+    let mut rt = rune::Runtime::new(a, shell_view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut rune::Tx| s.on_key(ev, tx));
+    let clip = rune::clipboard::memory();
+    rt.use_clipboard(&clip);
+    rt.frame(0.0);
+    let settle = |rt: &mut rune::Runtime<App>| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+            if rt.state.link_quiet() {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "the link never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for _ in 0..6 {
+            rt.frame(0.05);
+        }
+    };
+    let tap = |rt: &mut rune::Runtime<App>, (x, y): (f32, f32)| {
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+    };
+    let drag = |rt: &mut rune::Runtime<App>, (x0, y0): (f32, f32), (x1, y1): (f32, f32)| {
+        rt.pointer_move(x0, y0);
+        rt.pointer_down(x0, y0);
+        rt.frame(1.0 / 60.0);
+        for k in 1..=6 {
+            let f = k as f32 / 6.0;
+            rt.pointer_move(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
+            rt.frame(1.0 / 60.0);
+        }
+        rt.pointer_up(x1, y1);
+        rt.frame(1.0 / 60.0);
+    };
+    let cmd_c = |rt: &mut rune::Runtime<App>| {
+        rt.key(KeyEvent { key: Key::Command('c'), mods: rune::Mods { cmd: true, ..Default::default() } });
+        rt.frame(1.0 / 60.0);
+    };
+    let rect = |rt: &rune::Runtime<App>, k: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k) && !e.exiting).map(|e| e.rect).unwrap_or_else(|| panic!("{k}"));
+    settle(&mut rt);
+    let (x, y) = rt.find("top-view-gui").unwrap();
+    tap(&mut rt, (x, y));
+    settle(&mut rt);
+    let (x, y) = rt.find("monitor-row-billing-api:s-bill-main").unwrap();
+    tap(&mut rt, (x, y));
+    settle(&mut rt);
+    // No selection: Cmd+C copies nothing.
+    cmd_c(&mut rt);
+    assert!(clip.text().is_none(), "nothing selected, nothing copied");
+    // From the start of the prompt's text to the end of the reply's.
+    let you = rect(&rt, "monitor-body-you-1");
+    let cl = rect(&rt, "monitor-body-claude-2");
+    drag(&mut rt, (you[0] + 13.0, you[1] + 20.0), (cl[0] + cl[2] - 13.0, cl[1] + cl[3] - 14.0));
+    settle(&mut rt);
+    let sel: Vec<String> = rt.elements().into_iter().filter_map(|e| e.selected).filter(|s| !s.is_empty()).collect();
+    assert!(sel.len() >= 2, "both rows hold part of the selection: {sel:?}");
+    cmd_c(&mut rt);
+    let got = clip.text().map(|t| t.to_string()).unwrap_or_default();
+    assert!(got.contains("words from you") && got.contains("Beta reply"), "{got:?}");
+    assert!(got.contains('\n'), "joined by a new line: {got:?}");
+    assert!(!got.contains("You") && !got.contains("Claude ·"), "the texts only, not their labels: {got:?}");
+    // A drag over the step's text selects it and does not fold it open.
+    let step = rect(&rt, "monitor-step-s3");
+    let open = |rt: &rune::Runtime<App>| rt.elements().iter().any(|e| e.key.as_deref() == Some("monitor-out-s3") && !e.exiting);
+    let y = step[1] + step[3] / 2.0;
+    drag(&mut rt, (step[0] + 40.0, y), (step[0] + 200.0, y));
+    settle(&mut rt);
+    assert!(!open(&rt), "a drag selects, it does not fold");
+    assert!(rt.elements().into_iter().filter_map(|e| e.selected).any(|s| s.contains("cargo")), "the step's text is selected");
+    // A plain click still folds it open.
+    tap(&mut rt, (step[0] + 40.0, y));
+    settle(&mut rt);
+    assert!(open(&rt), "a click still folds");
+    let _ = std::fs::remove_file(&path);
+}
