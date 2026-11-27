@@ -390,7 +390,7 @@ local function ci_view(mv)
   if #(mv.threads or {}) > 0 then
     local rows = { gap = 4, w = "full", key = "ci-threads" }
     for i, t in ipairs(mv.threads) do
-      table.insert(rows, row{ gap = 8, w = "full", pad = 6, radius = "sm", fill = "surface-alt", border = hues[((i - 1) % 4) + 1], key = "ci-thread-" .. i,
+      table.insert(rows, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = hues[((i - 1) % 4) + 1], key = "ci-thread-" .. i,
         text{ t.mark, color = t.tone },
         text{ t.name, weight = "medium", truncate = true },
         text{ t.text, size = "sm", color = "text-muted", wrap = true, grow = 1 } })
