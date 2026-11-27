@@ -477,7 +477,8 @@ local function approved(state, data, p)
     local waits = mv and not mv.can_merge and not running
     local label = (mv and mv.button) or (running and "Merging…" or (st == "failed" and "Retry merge" or "Merge all"))
     local help = (held and "Files are still claimed: release them first") or (waits and (mv.why_not or mv.detail)) or (mv and mv.ff) or nil
-    table.insert(buttons, button{ label, variant = "primary", on = "merge", arg = p.id, busy = running, disabled = (held or waits) and not running, key = "merge-all", help = help })
+    -- While it waits, not drawn as the primary action: off and neutral, its reason as help.
+    table.insert(buttons, button{ label, variant = (waits and not running) and "neutral" or "primary", on = "merge", arg = p.id, busy = running, disabled = (held or waits) and not running, key = "merge-all", help = help })
   else
     table.insert(buttons, button{ "Close", on = "later", key = "plan-close" })
   end
