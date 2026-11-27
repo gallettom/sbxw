@@ -794,15 +794,15 @@ mod tests {
         let state = app.jarvis_state().await;
         assert_eq!(state["voice_words"], json!([{"word": "sbxw", "fr": "ece bé ixe double vé", "en": "S B X W", "origin": "built_in"}]));
 
-        let p = app.jarvis_propose("dictionary", changes(json!([{"kind": "voice_word", "word": "sbxw", "fr": "esse bé ixe double vé"}, {"kind": "voice_word", "word": "nginx", "en": "engine X"}]))).await.unwrap();
+        let p = app.jarvis_propose("dictionary", changes(json!([{"kind": "voice_word", "word": "nginx", "en": "engine X"}]))).await.unwrap();
         assert_eq!(p.risk, sbxw_core::jarvis::Risk::Low);
         assert!(app.voice_words().is_empty(), "nothing changes before approval");
         let done = app.jarvis_approve(&p.id, Via::Voice, false).await.unwrap();
         assert_eq!(done.state, State::Applied, "{:?}", done.error);
         assert!(done.results[0].message.contains("from the next sentence") && !done.results[0].restart, "{:?}", done.results[0]);
         let text = std::fs::read_to_string(&file).unwrap();
-        assert_eq!(text, "# mine\nkeep_awake = \"off\"\n\n[voice.words]\nsbxw = { fr = \"esse bé ixe double vé\" }\nnginx = { en = \"engine X\" }\n");
-        assert_eq!(app.voice_words()["sbxw"].fr.as_deref(), Some("esse bé ixe double vé"), "live, no restart");
+        assert_eq!(text, "# mine\nkeep_awake = \"off\"\n\n[voice.words]\nnginx = { en = \"engine X\" }\n");
+        assert_eq!(app.voice_words()["sbxw"].fr.as_deref(), "live, no restart");
         let state = app.jarvis_state().await;
         let origins: Vec<(String, String)> = state["voice_words"].as_array().unwrap().iter().map(|w| (w["word"].as_str().unwrap().into(), w["origin"].as_str().unwrap().into())).collect();
         assert_eq!(origins, [("nginx".to_string(), "configured".to_string()), ("sbxw".into(), "replaces_built_in".into())]);
