@@ -312,6 +312,27 @@ function entryItems(e) {
     }
   } else if (e.type === "system" && e.subtype === "compact_boundary") {
     out.push({ t: "compact", at: Date.parse(e.timestamp) || 0 });
+  } else if (e.type === "attachment") {
+    out.push(...queuedPrompt(e.attachment, at));
+  }
+  return out;
+}
+
+// A message the person sent while the agent worked, which the agent took
+// in the middle of its turn: Claude Code writes no `user` entry for it, only
+// this attachment (one queued and taken at the turn's end becomes an
+// ordinary `user` entry instead, and has no attachment). The person's own
+// words only: a peer's message or a task notification is left out.
+function queuedPrompt(a, at) {
+  if (!a || typeof a !== "object" || a.type !== "queued_command") return [];
+  if (a.commandMode !== "prompt" || !a.origin || a.origin.kind !== "human" || a.isMeta) return [];
+  const when = at || Date.parse(a.timestamp) || 0;
+  if (typeof a.prompt === "string") return a.prompt.trim() ? [{ t: "user", text: clipText(a.prompt, TEXT_MAX), meta: false, at: when }] : [];
+  const out = [];
+  for (const b of Array.isArray(a.prompt) ? a.prompt : []) {
+    if (!b || typeof b !== "object") continue;
+    if (b.type === "text" && typeof b.text === "string") out.push({ t: "user", text: clipText(b.text, TEXT_MAX), meta: false, at: when });
+    else if (b.type === "image") out.push({ t: "image", at: when });
   }
   return out;
 }

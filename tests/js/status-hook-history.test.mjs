@@ -294,3 +294,96 @@ test('a daemon that does not answer never holds the hook past its budget', async
   await api.sync(t.path, SID, dir, (b, then) => then(0, null));
   assert.deepEqual(api.loadState(dir, SID), {});
 });
+
+// A message the person sends while the agent works is queued. Taken at the
+// turn's end it becomes an ordinary `user` entry; taken in the middle of the
+// turn, Claude Code writes only a `queued_command` attachment for it.
+const enqueue = (content) => line({ type: 'queue-operation', operation: 'enqueue', content });
+const dequeue = () => line({ type: 'queue-operation', operation: 'dequeue' });
+const absorbed = (content, n) => line({ type: 'queue-operation', operation: 'remove', content, reason: 'absorbed_mid_turn', commandUuid: 'cmd-' + n, deliveryId: 'dl-' + n });
+const queued = (prompt, n, origin = { kind: 'human' }, extra = {}) => line({
+  type: 'attachment', uuid: 'att-' + n, timestamp: '2026-11-19T10:00:05Z',
+  attachment: { type: 'queued_command', prompt, source_uuid: 'cmd-' + n, delivery_id: 'dl-' + n, commandMode: 'prompt', origin, timestamp: '2026-11-19T10:00:03Z', humanTurn: true, ...extra },
+});
+const toolUse = (id) => said({ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } });
+const toolResult = (id) => line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'a\nb' }] } });
+
+test('a message taken mid-turn is the person\'s prompt, once, between the steps that took it', async () => {
+  const api = load();
+  const t = transcript();
+  const dir = mkdtempSync(join(tmpdir(), 'sbxw-hook-state-'));
+  writeFileSync(t.path, user('Tidy the shelf') + toolUse('tu1') + enqueue('also the drawer')
+    + toolResult('tu1') + absorbed('also the drawer', 1) + queued('also the drawer', 1) + toolUse('tu2') + toolResult('tu2')
+    + said({ type: 'text', text: 'Both done.' }));
+  const d = fakeDaemon();
+  await api.sync(t.path, SID, dir, d.post);
+  assert.deepEqual(d.items.map((i) => i.t + (i.text ? ':' + i.text : '')),
+    ['user:Tidy the shelf', 'tool_use', 'tool_result', 'user:also the drawer', 'tool_use', 'tool_result', 'assistant:Both done.']);
+  const p = d.items[3];
+  assert.equal(p.meta, false);
+  assert.equal(p.at, Date.parse('2026-11-19T10:00:05Z'), 'when the agent took it');
+});
+
+test('a message queued then taken at the turn\'s end gives one prompt', () => {
+  const api = load();
+  const t = transcript();
+  writeFileSync(t.path, user('first') + toolUse('tu1') + enqueue('second') + toolResult('tu1')
+    + said({ type: 'text', text: 'Done.' }) + dequeue() + user('second') + said({ type: 'text', text: 'And that.' }));
+  const piece = api.readTail(t.path, {}, SID);
+  assert.deepEqual(piece.items.filter((i) => i.t === 'user' && i.text === 'second').length, 1);
+});
+
+test('a queued command not from the person gives no prompt', () => {
+  const api = load();
+  const t = transcript();
+  writeFileSync(t.path,
+    queued('<cross-session-message from="x">hi</cross-session-message>', 1, { kind: 'peer', from: 'x', name: 'x' }, { isMeta: true, humanTurn: undefined })
+    + queued('<task-notification>done</task-notification>', 2, { kind: 'task-notification', producer: 'p' }, { commandMode: 'task-notification' })
+    + queued('typed as a command', 3, { kind: 'human' }, { commandMode: 'bash' })
+    + queued('no origin', 4, null)
+    + line({ type: 'attachment', attachment: { type: 'hook_success', content: 'ok' } }));
+  assert.deepEqual(api.readTail(t.path, {}, SID).items, []);
+});
+
+test('a re-read (reset, 409, restart backfill) gives an absorbed message once', async () => {
+  const api = load();
+  const t = transcript();
+  const dir = mkdtempSync(join(tmpdir(), 'sbxw-hook-state-'));
+  const text = user('go') + toolUse('tu1') + toolResult('tu1') + queued('and this', 1) + said({ type: 'text', text: 'ok' });
+  writeFileSync(t.path, text);
+  const d = fakeDaemon();
+  const count = () => d.items.filter((i) => i.text === 'and this').length;
+  await api.sync(t.path, SID, dir, d.post);
+  assert.equal(count(), 1);
+  // The daemon restarted: the backfill brings it back once.
+  d.restart();
+  await api.sync(t.path, SID, dir, d.post);
+  assert.equal(count(), 1);
+  // Out of step (409): posted again from the daemon's offset.
+  d.next = 0;
+  d.items = [];
+  api.saveState(dir, SID, { off: text.length });
+  await api.sync(t.path, SID, dir, d.post);
+  assert.equal(count(), 1);
+  // A reset from the hook's side.
+  api.saveState(dir, SID, { reset: true });
+  await api.sync(t.path, SID, dir, d.post);
+  assert.equal(count(), 1);
+});
+
+test('a malformed queued command is skipped without an error', () => {
+  const api = load();
+  const t = transcript();
+  writeFileSync(t.path,
+    line({ type: 'attachment' })
+    + line({ type: 'attachment', attachment: 'queued_command' })
+    + line({ type: 'attachment', attachment: { type: 'queued_command' } })
+    + line({ type: 'attachment', attachment: { type: 'queued_command', commandMode: 'prompt', origin: 'human', prompt: 'x' } })
+    + queued(42, 1) + queued('   ', 2) + queued([null, 7, { type: 'text' }], 3)
+    + queued([{ type: 'text', text: 'blocks too' }, { type: 'image', source: {} }], 4)
+    + queued('x'.repeat(100000), 5));
+  const items = api.readTail(t.path, {}, SID).items;
+  assert.deepEqual(items.map((i) => i.t), ['user', 'image', 'user']);
+  assert.equal(items[0].text, 'blocks too');
+  assert.ok(items[2].text.length < 100000, 'clipped like every prompt');
+});

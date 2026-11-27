@@ -59,6 +59,22 @@ down, ends the run, nothing is kept, and the same piece goes again at the
 next event. An idle session that fires no event at all still has nothing
 until its next event (a restarted daemon cannot read a sandbox's files).
 
+**A message sent while the agent works.** Claude Code queues it
+(`queue-operation` `enqueue`). Taken when the turn ends (`dequeue`), it
+becomes an ordinary `user` entry, read as any prompt. Taken by the agent in
+the middle of its turn (`remove`, `absorbed_mid_turn`), no `user` entry is
+ever written for it: only an `attachment` entry of type `queued_command`
+with the words in `prompt`. The hook reads that attachment as the person's
+prompt (`t: "user"`, the entry's timestamp), where it sits, so it shows
+between the steps of the turn that took it. Only when it is the person's:
+`origin.kind` `human` and `commandMode` `prompt`. A peer's message
+(`origin.kind` `peer`, a cross-session message) and a task notification
+(`task-notification`) are left out, as are the `queue-operation` entries
+themselves. Each case has exactly one entry that gives the prompt, and the daemon
+takes each byte range once (a post must start at its `next`) and clears the
+log on a `reset`, so a re-read (a 409, a restart backfill) never doubles it. A message still waiting in the
+queue does not show until it is taken.
+
 `Stop`'s reply arrives before the transcript has it: it is kept as a
 `provisional` item, removed when the transcript's next post arrives (which
 carries the same text as an `assistant_text`). It is the end of its turn:
@@ -75,7 +91,7 @@ carries. Absent fields are left out.
 
 | `kind` | Carries | From |
 |---|---|---|
-| `user_prompt` | `text`: the person's words; a slash command or `!` command as typed (`/model opus`, `! ls`); `files`: base names of the files sent with it (see below) | transcript; `UserPromptSubmit` (old hook) |
+| `user_prompt` | `text`: the person's words; a slash command or `!` command as typed (`/model opus`, `! ls`); `files`: base names of the files sent with it (see below) | transcript (a `user` entry, or a `queued_command` attachment taken mid-turn); `UserPromptSubmit` (old hook) |
 | `assistant_text` | `text`; `provisional: true` for `Stop`'s early copy | transcript; `Stop` |
 | `tool_call` | `tool {name, summary, id}` | transcript; `PreToolUse` (old hook) |
 | `tool_result` | `result {status: ok\|error, size, head, id}` | transcript; `PostToolUse` (old hook) |
