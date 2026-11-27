@@ -1356,6 +1356,9 @@
               <input id="mcp-url" class="field-input" type="text" spellcheck="false" placeholder="https://mcp.example.com/mcp" aria-label="URL">
               <textarea id="mcp-headers" class="field-input" rows="2" spellcheck="false"
                         placeholder="Authorization: Bearer ${api-key}&#10;one header per line" aria-label="Headers"></textarea>
+              <input id="mcp-client-id" class="field-input" type="text" spellcheck="false" autocomplete="off" placeholder="OAuth client ID (optional)" aria-label="OAuth client ID" aria-describedby="mcp-client-id-help">
+              <p class="mcp-hint" id="mcp-client-id-help">Only for a server that needs a pre-registered OAuth client, such as GitHub.
+                Its client secret, if it has one, is asked below and stored as <code>mcp:&lt;name&gt;:client_secret</code>.</p>
               <div id="mcp-secrets"></div>
               <p class="mcp-hint">A <code>${key}</code> in a header is a secret, stored as <code>mcp:&lt;name&gt;:&lt;key&gt;</code>.
                 OAuth servers are added unauthorized: run <code>sbx mcp auth &lt;name&gt;</code> in a terminal.</p>
