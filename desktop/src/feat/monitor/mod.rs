@@ -51,15 +51,24 @@ use serde_json::{json, Map, Value as J};
 pub const SCREEN: &str = "monitor";
 /// `data.monitor`: what the screen draws.
 pub const KEY: &str = "monitor";
+/// The dialog of a sent picture opened large ([`pics::Pics::zoom_open`]).
+pub const PICTURE: &str = "monitor-picture";
+/// `data.monitor_picture`: what that dialog draws.
+pub const PICTURE_UI: &str = "monitor_picture";
 
 /// `escape` only reaches it while `monitor_ui.popup` is true (the core's
-/// popup rule); the Monitor sets none yet, so it does nothing.
+/// popup rule); the Monitor sets none yet, so it does nothing. The picture
+/// dialog's Escape is the core's own (a modal closes first, telling no
+/// feature): its picture is forgotten at the feature's next call ([`lapse`]).
 const KEYS: &[&str] = &["up", "down", "enter", "type", "escape"];
 
 pub const FEATURE: Feature = Feature {
     name: "monitor",
     events: &["session", "history"],
-    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/monitor.luau"), slot: Slot::Base { title: "Sessions", icon: "inbox", open: "monitor_open" } }],
+    screens: &[
+        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/monitor.luau"), slot: Slot::Base { title: "Sessions", icon: "inbox", open: "monitor_open" } },
+        ScreenDecl { name: PICTURE, src: include_str!("../../../screens/monitor-picture.luau"), slot: Slot::Modal { width: 1080.0, light_dismiss: false } },
+    ],
     shortcuts: &[Shortcut { key: 'i', intent: "monitor_toggle", args: "{}", help: "Switch between GUI and TUI" }],
     intents: INTENTS,
     act,
@@ -96,6 +105,8 @@ pub const INTENTS: &[Spec] = &[
     ),
     d("monitor_attach", &[("key", Arg::Str, true)], "The system's file dialog, to attach a file to what you write to that session (the one shown). The file waits as a chip under the box until Send; files dropped on Sessions or a picture pasted there are attached the same way. Refused while the composer is."),
     d("monitor_commands", &[("key", Arg::Str, true)], "Reads the skills and slash commands of that session's sandbox for the composer's completion list (once per sandbox; a stopped sandbox is not started). View state only: nothing is sent."),
+    d("monitor_picture", &[("key", Arg::Str, true)], "Opens a picture the person sent, large, in a dialog over the window: `key` is the key of its preview under their prompt in the session shown (the path is the one Sessions found in that prompt). Read again from the sandbox; refused while anything covers the view or a Jarvis proposal waits."),
+    d("monitor_picture_close", &[], "Closes the picture dialog; the large picture is forgotten."),
     d("monitor_attach_remove", &[("key", Arg::Str, true), ("id", Arg::Int(1, 1_000_000_000), true)], "Removes attached file `id` from that session's waiting files."),
     Spec {
         name: "monitor_say",
@@ -165,10 +176,52 @@ pub fn held(cx: &Ctx) -> Option<String> {
 }
 
 fn on_event(cx: &Ctx, name: &str, info: &J) -> Vec<Action> {
-    let mut out = on_event_in(cx, name, info);
-    if name == "session" {
-        out.extend(settle(&mut STATE().lock().unwrap(), cx));
+    guarded(cx, || {
+        let mut out = on_event_in(cx, name, info);
+        if name == "session" {
+            out.extend(settle(&mut STATE().lock().unwrap(), cx));
+        }
+        out
+    })
+}
+
+/// Is the picture dialog the modal shown?
+fn picture_shown(cx: &Ctx) -> bool {
+    cx.data["app"]["modal"]["screen"] == PICTURE
+}
+
+/// The picture dialog was closed by the core (Escape): its large picture
+/// is forgotten now.
+fn lapse(m: &mut Model, cx: &Ctx) -> Vec<Action> {
+    if m.pics.zoom.is_none() || picture_shown(cx) {
+        return vec![];
     }
+    let mut out = m.pics.zoom_close();
+    out.push(Action::Set { key: PICTURE_UI.into(), value: J::Null });
+    out
+}
+
+/// The large picture went (another session, the view left): its dialog
+/// closes with it.
+fn zoom_end(m: &Model, cx: &Ctx, had: bool) -> Vec<Action> {
+    if !had || m.pics.zoom.is_some() {
+        return vec![];
+    }
+    let mut out = vec![Action::Set { key: PICTURE_UI.into(), value: J::Null }];
+    if picture_shown(cx) {
+        out.push(Action::CloseModal);
+    }
+    out
+}
+
+/// `f`, between [`lapse`] and [`zoom_end`].
+fn guarded(cx: &Ctx, f: impl FnOnce() -> Vec<Action>) -> Vec<Action> {
+    let (mut out, had) = {
+        let mut m = STATE().lock().unwrap();
+        (lapse(&mut m, cx), m.pics.zoom.is_some())
+    };
+    out.extend(f());
+    out.extend(zoom_end(&STATE().lock().unwrap(), cx, had));
     out
 }
 
@@ -322,8 +375,18 @@ fn settle(m: &mut Model, cx: &Ctx) -> Vec<Action> {
     out
 }
 
-/// A picture read for a preview answered (`pic:<n>`).
+/// A picture read answered: for a preview (`pic:<n>`) or opened large (`zoom:<n>`).
 fn on_bytes(cx: &Ctx, call: &Call, r: Result<(u16, Vec<u8>, String), String>) -> Vec<Action> {
+    guarded(cx, || on_bytes_in(cx, call, r))
+}
+
+fn on_bytes_in(cx: &Ctx, call: &Call, r: Result<(u16, Vec<u8>, String), String>) -> Vec<Action> {
+    if let Some(n) = call.tag.strip_prefix("zoom:").and_then(|n| n.parse::<u64>().ok()) {
+        let mut m = STATE().lock().unwrap();
+        let Some(mut out) = m.pics.zoom_got(n, r) else { return vec![] };
+        out.push(Action::Set { key: PICTURE_UI.into(), value: m.pics.zoom_view() });
+        return out;
+    }
     let Some(n) = call.tag.strip_prefix("pic:").and_then(|n| n.parse::<u64>().ok()) else { return vec![] };
     let mut m = STATE().lock().unwrap();
     let Some(mut out) = m.pics.got(n, r) else { return vec![] };
@@ -334,6 +397,10 @@ fn on_bytes(cx: &Ctx, call: &Call, r: Result<(u16, Vec<u8>, String), String>) ->
 }
 
 fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
+    guarded(cx, || on_answer_in(cx, call, r))
+}
+
+fn on_answer_in(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
     let ok = matches!(&r, Ok((c, b)) if (200..300).contains(c) && b["ok"] != false);
     let why = match &r {
         Ok((c, b)) => b["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("the daemon answered {c}")),
@@ -411,7 +478,12 @@ fn history_answer(m: &mut Model, cx: &Ctx, rest: &str, r: Result<(u16, J), Strin
 }
 
 fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
-    let mut out = act_on(cx, a)?;
+    let (lapsed, had) = {
+        let mut m = STATE().lock().unwrap();
+        (lapse(&mut m, cx), m.pics.zoom.is_some())
+    };
+    let mut out = lapsed;
+    out.extend(act_on(cx, a)?);
     let mut m = STATE().lock().unwrap();
     match a.name {
         // Leaving the view: no session followed.
@@ -428,6 +500,7 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
     } else {
         out.extend(settle(&mut m, cx));
     }
+    out.extend(zoom_end(&m, cx, had));
     Ok(out)
 }
 
@@ -545,6 +618,21 @@ fn act_on(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             // The Requests panel's own path: the same picks, the same checks, `/api/answer`.
             Ok(vec![Action::Intent { name: "agent_pick".into(), args }])
         }
+        "monitor_picture" => {
+            if let Some(why) = held(cx) {
+                return Err(why.replacen("Not sent", "Not opened", 1));
+            }
+            if !shown(cx) {
+                return Err("Not opened: Sessions is not shown".into());
+            }
+            let mut out = m.pics.zoom_open(a.req("key")).ok_or("That picture is not shown any more")?;
+            out.push(Action::Set { key: PICTURE_UI.into(), value: m.pics.zoom_view() });
+            out.push(Action::OpenModal { screen: PICTURE.into(), arg: J::Null });
+            Ok(out)
+        }
+        // Forgotten here; the dialog closes with it (`zoom_end`).
+        "monitor_picture_close" if m.pics.zoom.is_some() => Ok(m.pics.zoom_close()),
+        "monitor_picture_close" => Ok([Action::Set { key: PICTURE_UI.into(), value: J::Null }].into_iter().chain(picture_shown(cx).then_some(Action::CloseModal)).collect()),
         "monitor_send" => send(&mut m, cx, a),
         "monitor_say" => say(&mut m, cx, a),
         "monitor_commands" => {
