@@ -335,13 +335,44 @@ local function two_lines(s, w)
   return cut .. "…"
 end
 
+-- A team's state: its plan's merge status in the daemon's words when it has
+-- a merge ("Testing the CI branch", "Merged to CI", "CI failed", "Merged to
+-- main"), its detail as the help; else the team's state. Data, drawn as text.
+local function state_badge(t, key)
+  local b = t.badge
+  if b and nz(b.word) then return badge{ b.word, tone = b.tone or "neutral", help = b.help, key = key } end
+  return badge{ t.state or "", tone = t.tone or "neutral", key = key }
+end
+
+-- The title slot beside the overlay's name holds the picker and the team's
+-- state: the overlay's width less this much (its name and its close button,
+-- as picker_w keeps), and a state chip about this wide (11 pt, its padding).
+local TITLE_ROOM = 196
+local function state_w(s)
+  local b = s.badge
+  local w = (b and nz(b.word)) and b.word or (s.state or "")
+  return ulen(w) * 6.4 + 12
+end
+
+-- The picker's width, and whether the state fits beside it: a long word
+-- ("Main moved: CI rebuild waits") narrows the picker down to its least
+-- width; past that the state is drawn first in the summary, under it.
+local function title_fit(s, ow, wide)
+  local bw = picker_w(ow, wide)
+  if not s then return bw, true end
+  local room = ow - TITLE_ROOM - 8 - state_w(s)
+  if bw <= room then return bw, true end
+  if room >= 104 then return math.floor(room), true end
+  return bw, false
+end
+
 local function picker_button(ui, s, ow, wide)
   local p = ui.picker or {}
   local names, summary, color
   if s then names, summary, color = s.names, s.summary, s.color
   elseif ui.all then names, summary = "All teams", "every team's latest messages"
   else names = "Pick a team" end
-  local bw = picker_w(ow, wide)
+  local bw, beside = title_fit(s, ow, wide)
   -- The scope's capsule (scope.rs's look, the team sandbox's group colour),
   -- as every scoped screen draws it; neutral for All teams.
   local lk = (s and s.look) or {}
@@ -353,7 +384,7 @@ local function picker_button(ui, s, ow, wide)
       text{ names or "", size = "sm", weight = "medium", mono = true, color = lk.text or "text-bright", truncate = true, max_w = math.floor(bw * 0.55) },
       nz(summary) and wide and text{ summary, size = "xs", color = lk.muted or "text-muted", truncate = true, grow = 1 } or spacer{},
       icon{ "chevron-down", size = 12, color = lk.muted or "text-muted" } },
-    s and badge{ s.state or "", tone = s.tone or "neutral" } or false }
+    (s and beside) and state_badge(s, "board-team-state") or false }
 end
 
 local function picker_row(t, i, p, mw)
@@ -367,7 +398,7 @@ local function picker_row(t, i, p, mw)
       column{ w = 8, h = 8, radius = "mark", fill = t.color or "text-muted" },
       text{ t.names or "", size = "sm", mono = true, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
       current and icon{ "check", size = 12, color = "accent" } or false,
-      nz(t.state) and badge{ t.state, tone = t.tone or "neutral" } or false,
+      nz(t.state) and state_badge(t, "board-team-state-" .. t.id) or false,
       nz(t.when) and text{ t.when, size = "xs", color = "text-muted" } or false },
     shown and text{ shown, size = "xs", color = "text-muted", wrap = true } or false }
 end
@@ -497,10 +528,12 @@ local function counter(ui, key, group, icon_name, tone, n, word, help, extra)
     extra or false }
 end
 
-local function summary(s, ui, narrow)
+local function summary(s, ui, narrow, below)
   local c = s.counts or {}
   local head = { gap = 8, w = "full", wrap = true, key = "board-summary-team" }
-  -- (The team's state is beside the picker, in the title: not twice.)
+  -- The team's state is beside the picker, in the title (not twice), unless
+  -- its word is too long for the title at this width: then first here.
+  if below then head[#head + 1] = row{ h = 24, align = "center", key = "board-chip-state", state_badge(s, "board-team-state") } end
   head[#head + 1] = row{ key = "board-chip-lead", gap = 0, radius = "pill", h = 24, px = 0,
     fill = ui.thread == "lead" and "active-bg" or "floor", border = ui.thread == "lead" and "accent" or "elevated",
     row{ key = "board-thread-lead", on = "thread", arg = ui.thread == "lead" and "" or "lead", selected = ui.thread == "lead",
@@ -511,7 +544,7 @@ local function summary(s, ui, narrow)
   -- As many chips as the line holds (two lines when narrow); the rest
   -- behind "+n", which opens Details (where every thread is listed and
   -- pressable). A selected thread is always shown.
-  local room = (CONV_W - 24) * (narrow and 2 or 1) - 8 - math.min(narrow and 100 or 200, ulen(s.lead or "the sandbox's main session") * 6.8) - 60 - 70
+  local room = (CONV_W - 24) * (narrow and 2 or 1) - 8 - math.min(narrow and 100 or 200, ulen(s.lead or "the sandbox's main session") * 6.8) - 60 - 70 - (below and (state_w(s) + 8) or 0)
   local used, hidden = 0, 0
   local threads = s.threads or {}
   for i, t in ipairs(threads) do
@@ -696,6 +729,7 @@ return {
     CPL = math.max(16, math.floor((bubble_w() - 24) / CHAR_W))
     local sb = s and s.sandbox or true
     local picker = picker_button(ui, s, ow, wide)
+    local _, beside = title_fit(s, ow, wide)
     -- The picker's list over the body, and under it a layer that closes it
     -- on a press anywhere else (and does nothing else).
     local menu = picker_menu(ui, ow, oh, wide)
@@ -704,7 +738,7 @@ return {
     if s and ui.group == "commits" then body = commits_view(s) else body = conversation(ui, sb) end
     return column{ h = "full", gap = 8, w = "full",
       picker,
-      s and summary(s, ui, not wide) or false,
+      s and summary(s, ui, not wide, not beside) or false,
       filters(ui, wide),
       body,
       dismiss, menu }

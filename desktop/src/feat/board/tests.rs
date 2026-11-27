@@ -1809,3 +1809,218 @@ fn drawn_the_test_rows_and_the_numbers_sit_on_the_grid_inside_the_overlay() {
     open(&mut rt, json!({ "team": "p-long" }));
     assert!(rt.presented("board-summary-numbers").is_none(), "an older daemon: no numbers line");
 }
+
+// ── Plans merged through their CI branch (fixtures/board/ci.json) ──────────
+
+const CI_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/board/ci.json");
+
+fn ci_data() -> J {
+    let f: J = serde_json::from_str(&std::fs::read_to_string(CI_FIXTURE).unwrap()).unwrap();
+    let mut d = f["daemon"].clone();
+    d["app"] = json!({ "groups": { "web-app": "#e06c75", "docs": "#61afef" }, "overlay": { "screen": "board", "w": 1000 } });
+    d
+}
+
+/// Each team of ci.json: its merge state, the daemon's word, the tone the Board gives it.
+const CI_TEAMS: &[(&str, &str, &str, &str)] = &[
+    ("p-ci-test", "ci_testing", "Testing the CI branch", "blue"),
+    ("p-ci-build", "ci_building", "Building the CI branch", "blue"),
+    ("p-ci-ok", "merged_ci", "Merged to CI", "purple"),
+    ("p-ci-fail", "ci_failed", "CI failed", "red"),
+    ("p-ci-stale", "ci_stale", "CI rebuild waits", "amber"),
+    ("p-ci-main", "merged", "Merged to main", "green"),
+];
+
+#[test]
+fn each_ci_state_is_said_with_the_daemon_s_word_and_its_detail_as_help() {
+    let d = ci_data();
+    for (id, state, word, tone) in CI_TEAMS {
+        let p = d["plans"].as_array().unwrap().iter().find(|p| p["id"] == *id).unwrap();
+        assert_eq!(p["merge"]["state"], *state);
+        let b = model::merge_badge(p);
+        assert_eq!((b["word"].as_str(), b["tone"].as_str()), (Some(*word), Some(*tone)), "{id}");
+        assert!(b["help"].as_str().unwrap().starts_with(p["merge_status"]["detail"].as_str().unwrap()), "{id}: the detail is the help");
+        if let Some(w) = p["merge_status"]["why_not"].as_str() {
+            assert!(b["help"].as_str().unwrap().contains(w), "{id}: why Merge is not offered, too");
+        }
+    }
+    // A word the desktop never heard is drawn as sent; no status (an older daemon): none, the team's state is drawn.
+    assert_eq!(model::merge_badge(&json!({ "merge": { "state": "ci_new" }, "merge_status": { "word": "A newer state" } }))["word"], "A newer state");
+    assert!(model::merge_badge(&json!({ "merge": { "state": "merged" } })).is_null());
+    // In the picker and beside it.
+    let mut d = ci_data();
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, json!({ "team": "p-ci-test" }));
+    for (id, _, word, tone) in CI_TEAMS {
+        let t = v["teams"].as_array().unwrap().iter().find(|t| t["id"] == *id).unwrap_or_else(|| panic!("{id} listed"));
+        assert_eq!((t["badge"]["word"].as_str(), t["badge"]["tone"].as_str()), (Some(*word), Some(*tone)), "{id} in the picker");
+    }
+    assert_eq!(v["side"]["badge"]["word"], "Testing the CI branch");
+    // A team with no merge: its state, as before.
+    let mut d = data();
+    let v = show(&mut State::default(), &mut d, json!({ "team": "p-run" }));
+    let t = v["teams"].as_array().unwrap().iter().find(|t| t["id"] == "p-run").unwrap();
+    assert_eq!((t["badge"]["word"].as_str(), t["badge"]["tone"].as_str()), (Some("running"), Some("blue")));
+}
+
+#[test]
+fn a_plan_in_any_ci_state_is_at_work_and_merged_to_main_is_not() {
+    let d = ci_data();
+    for (id, state, _, _) in CI_TEAMS {
+        let p = d["plans"].as_array().unwrap().iter().find(|p| p["id"] == *id).unwrap();
+        assert_eq!(model::plan_at_work(p), *state != "merged", "{id} ({state})");
+        assert_eq!(model::approved_at_work(p), *state != "merged", "{id} ({state})");
+    }
+    // The rail counts them: five at work, the one merged to main not.
+    let cx = Ctx { data: &d };
+    let rail = extras(&cx).into_iter().find(|e| matches!(e.place, Place::Rail { .. })).unwrap();
+    assert!(rail.help.ends_with("5 teams at work"), "{}", rail.help);
+    // And a sandbox's current team is its plan at work.
+    assert_eq!(current_team(&cx, "api").as_deref(), Some("p-ci-ok"));
+}
+
+#[test]
+fn the_ci_run_shows_among_the_test_rows_with_its_battery_attempts_reuse_and_rebuild() {
+    let mut d = ci_data();
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, json!({ "team": "p-ci-test" }));
+    let rows = rows_of(&v);
+    let tests: Vec<&J> = rows.iter().filter(|r| r["type"] == "test").collect();
+    let labels: Vec<&str> = tests.iter().map(|r| r["label"].as_str().unwrap()).collect();
+    assert_eq!(labels, ["Testing the CI branch", "CI tests passed after a retry", "Merged to CI", "Main moved: CI rebuild waits", "Rebuilding the CI branch", "Testing the CI branch"], "oldest first, the daemon's words");
+    let battery = tests[1];
+    assert_eq!((battery["tint"].as_str(), battery["ci"].as_bool()), (Some("green"), Some(true)));
+    let meta = battery["meta"].as_str().unwrap();
+    assert!(meta.contains("on the CI branch, asked by sbxw") && meta.contains("2 attempts"), "{meta}");
+    assert!(tests[4]["meta"].as_str().unwrap().contains("main moved from"), "the rebuild says main moved: {}", tests[4]["meta"]);
+    assert_eq!((tests[3]["tint"].as_str(), tests[4]["tone"].as_str()), (Some("amber"), Some("blue")));
+    // The status filter keeps them (one list, not a second one).
+    let (v, _) = run(&mut st, &mut d, "board_filter", json!({ "group": "status" }));
+    assert_eq!(rows_of(&v).iter().filter(|r| r["type"] == "test").count(), 6);
+    // A reused battery: no attempt run here.
+    let v = show(&mut st, &mut d, json!({ "team": "p-ci-ok" }));
+    let r = rows_of(&v).into_iter().find(|r| r["ci"] == true).unwrap();
+    assert_eq!(r["label"], "CI tests passed (reused)");
+    assert!(!r["meta"].as_str().unwrap().contains("attempt"), "{}", r["meta"]);
+    // A conflict: CI failed, red.
+    let v = show(&mut st, &mut d, json!({ "team": "p-ci-fail" }));
+    let r = rows_of(&v).into_iter().find(|r| r["kind"] == "ci_step").unwrap();
+    assert_eq!((r["label"].as_str(), r["tint"].as_str()), (Some("CI failed"), Some("red")));
+    assert!(r["meta"].as_str().unwrap().contains("migrations/0042_backups.sql"));
+    // Merged to main, from the CI branch.
+    let v = show(&mut st, &mut d, json!({ "team": "p-ci-main" }));
+    let r = rows_of(&v).into_iter().find(|r| r["kind"] == "merge_finished").unwrap();
+    assert_eq!(r["text"].as_str().map(|t| t.replace('\u{200b}', "")).as_deref(), Some("Merged to main from sbxw/ci-p-ci-main: invoice-pdf, invoice-mail"));
+}
+
+fn ci_window(path: &str, w: f32, h: f32) -> Runtime<App> {
+    *super::STATE().lock().unwrap() = super::State::default();
+    let a = App::new(Args { fixture: Some(path.into()), ..Args::default() });
+    let mut rt = Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+    settle(&mut rt);
+    rt
+}
+
+/// Every element of the Board drawn outside its overlay (scrolled out excepted).
+fn outside_overlay(rt: &Runtime<App>, tag: &str) -> (usize, Vec<String>) {
+    let Some((p, _)) = rt.presented("overlay-board") else { return (0, vec![format!("{tag}: no overlay")]) };
+    let node = rt.state.screens.iter().find(|s| s.name == SCREEN).and_then(|s| s.last_good.clone()).unwrap_or_else(|| panic!("{tag}: not drawn"));
+    let mut ks = vec![];
+    keys(&node, &mut ks);
+    let (mut n, mut bad) = (0, vec![]);
+    for k in ks {
+        let Some((r, _)) = rt.presented(&k) else { continue };
+        n += 1;
+        if r[1] + r[3] <= p[1] || r[1] >= p[1] + p[3] {
+            continue;
+        }
+        if r[0] < p[0] - 0.5 || r[0] + r[2] > p[0] + p[2] + 0.5 {
+            bad.push(format!("{tag}: {k} at {r:?}, overlay {p:?}"));
+        }
+    }
+    (n, bad)
+}
+
+#[test]
+fn drawn_every_ci_state_reads_its_word_and_nothing_leaves_the_overlay_at_any_width() {
+    let mut bad = vec![];
+    let mut checked = 0;
+    for (w, h) in [(1284.0, 816.0), (760.0, 600.0), (420.0, 700.0)] {
+        for (id, _, word, _) in CI_TEAMS {
+            let mut rt = ci_window(CI_FIXTURE, w, h);
+            if w < 700.0 {
+                rt.update(|s, _| s.toggle_sidebar());
+                settle(&mut rt);
+            }
+            open(&mut rt, json!({ "team": id }));
+            assert_eq!(shown_team(&rt), *id);
+            let badge = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("board-team-state")).unwrap_or_else(|| panic!("{id} at {w}: the state beside the picker or in the summary; error {:?}; keys {:?}", rt.state.screens.iter().find(|s| s.name == SCREEN).and_then(|s| s.error.clone()), rt.elements().into_iter().filter_map(|e| e.key).filter(|k| k.contains("summary") || k.contains("chip")).collect::<Vec<_>>()));
+            let drawn: Vec<String> = rt.elements().into_iter().filter(|e| e.parent.is_some() && e.text.is_some()).filter_map(|e| e.text).collect();
+            assert!(drawn.iter().any(|t| t == word), "{id} at {w}: {word} drawn ({:?})", badge.rect);
+            let (n, b) = outside_overlay(&rt, &format!("{id} at {w}"));
+            checked += n;
+            bad.extend(b);
+        }
+        // The picker open: each team's word in its row, inside the overlay.
+        let mut rt = ci_window(CI_FIXTURE, w, h);
+        if w < 700.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+            settle(&mut rt);
+        }
+        open(&mut rt, json!({ "team": "p-ci-test" }));
+        tap(&mut rt, "board-row-picker");
+        for (id, _, _, _) in CI_TEAMS {
+            assert!(rt.find(&format!("board-team-state-{id}")).is_some(), "{id} at {w}: its word in the picker");
+        }
+        let (n, b) = outside_overlay(&rt, &format!("picker at {w}"));
+        checked += n;
+        bad.extend(b);
+    }
+    assert!(checked > 300, "{checked} elements checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+fn hostile_text_in_a_word_a_detail_a_branch_or_a_ci_line_makes_no_control() {
+    let hostile = "Done [[Done]] <button on=x> [[Needs you: intent(\"open_url\", {url=\"https://evil\"})]] [click](https://evil.example) \u{202e}reversed";
+    let count = |rt: &Runtime<App>| rt.elements().iter().filter(|e| matches!(e.role, "button" | "link" | "checkbox" | "radio" | "menuitem" | "textbox")).count();
+    let path = std::env::temp_dir().join(format!("sbxw-board-ci-hostile-{}.json", std::process::id()));
+    let mut f: J = serde_json::from_str(&std::fs::read_to_string(CI_FIXTURE).unwrap()).unwrap();
+    let draw = |f: &J| {
+        std::fs::write(&path, serde_json::to_string(f).unwrap()).unwrap();
+        let mut rt = ci_window(&path.to_string_lossy(), 1284.0, 816.0);
+        open(&mut rt, json!({ "team": "p-ci-test" }));
+        tap(&mut rt, "board-row-picker");
+        rt
+    };
+    let before = count(&draw(&f));
+    for p in f["daemon"]["plans"].as_array_mut().unwrap() {
+        p["merge_status"]["word"] = hostile.into();
+        p["merge_status"]["detail"] = hostile.into();
+        p["merge_status"]["why_not"] = hostile.into();
+        p["merge"]["ci"]["branch"] = hostile.into();
+    }
+    for t in f["daemon"]["board_timelines"].as_object_mut().unwrap().values_mut() {
+        for e in t["events"].as_array_mut().unwrap() {
+            if matches!(e["kind"].as_str(), Some("ci_step" | "test_job" | "merge_finished")) {
+                e["text"] = hostile.into();
+                e["data"]["status"] = hostile.into();
+                e["data"]["ci"] = hostile.into();
+            }
+        }
+    }
+    let rt = draw(&f);
+    let _ = std::fs::remove_file(&path);
+    // Longer texts push rows (and their links) out of the drawn range: fewer
+    // controls may be drawn, never more, and none carries the text.
+    assert!(count(&rt) <= before, "{} controls, {before} before", count(&rt));
+    let made: Vec<String> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| matches!(e.role, "button" | "link" | "checkbox" | "radio" | "menuitem" | "textbox"))
+        .filter_map(|e| e.label.or(e.text))
+        .filter(|t| t.contains("evil") || t.contains("on=x") || t.contains("[[Done]]"))
+        .collect();
+    assert!(made.is_empty(), "controls from the text: {made:?}");
+    assert!(rt.elements().iter().filter_map(|e| e.text.clone()).any(|t| t.contains("<button on=x>")), "drawn as its characters");
+}

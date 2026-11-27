@@ -27,6 +27,12 @@
 //! reused (none for a plan with no test command), times the person was
 //! asked. An older daemon sends none: the summary stays as it was.
 //!
+//! A plan with a merge says its status in the daemon's words
+//! (`merge_status`, read from the app's plans: "Testing the CI branch",
+//! "Merged to CI", "CI failed", "Merged to main") beside the picker and in
+//! its list; the CI run's steps and the battery sbxw asks on the CI branch
+//! are lines among the test rows ([`model::merge_badge`], `model::ci_step`).
+//!
 //! Read only. Acting stays where it is done: the plan dialog (approve,
 //! merge), the Requests panel (answers), a thread's terminal. The Board
 //! links there. It shows only what went through sbxw: the lead's and
@@ -176,7 +182,7 @@ fn shown(cx: &Ctx) -> bool {
 /// latest plan pending or at work, else its latest.
 pub fn current_team(cx: &Ctx, sandbox: &str) -> Option<String> {
     let plans: Vec<&J> = cx.get("plans").as_array().into_iter().flatten().filter(|p| p["sandbox"] == sandbox).collect();
-    let at_work = |p: &J| p["state"] == "pending" || (p["state"] == "approved" && p["closed"] != true && p["merge"]["state"] != "merged");
+    let at_work = |p: &J| model::plan_at_work(p);
     let latest = |v: Vec<&J>| v.into_iter().max_by_key(|p| p["created_ms"].as_u64().unwrap_or(0)).and_then(|p| p["id"].as_str().map(str::to_string));
     latest(plans.iter().copied().filter(|p| at_work(p)).collect()).or_else(|| latest(plans))
 }
@@ -607,6 +613,13 @@ impl State {
         let groups = cx.get("app")["groups"].clone();
         let now = crate::feat::files::view::now_secs();
         let listed = PICKER_PAGE * self.picker_pages.max(1);
+        // Each team's merge status, from the plans the app already reads (the daemon's `merge_status`).
+        let plans = cx.get("plans");
+        let badge = |id: &J, state: &str| -> J {
+            let p = plans.as_array().into_iter().flatten().find(|p| p["id"] == *id);
+            let b = p.map(model::merge_badge).unwrap_or(J::Null);
+            if b.is_null() { json!({ "word": state, "tone": model::team_tone(state), "help": J::Null }) } else { b }
+        };
         let teams: Vec<J> = self
             .teams
             .iter()
@@ -616,7 +629,7 @@ impl State {
                 let state = t["state"].as_str().unwrap_or("");
                 let last = t["last_ms"].as_u64().or(t["updated_ms"].as_u64()).or(t["created_ms"].as_u64());
                 json!({ "id": t["id"], "live": model::team_rank(state) < model::FINISHED, "names": model::team_names(t), "summary": t["summary"].as_str().filter(|s| !s.is_empty()).map(model::breakable).unwrap_or_else(|| "(no summary)".into()),
-                    "sandbox": sb, "color": groups[sb], "state": state, "tone": model::team_tone(state), "when": last.map(|l| crate::feat::files::view::ago(l / 1000, now)).unwrap_or_default() })
+                    "sandbox": sb, "color": groups[sb], "state": state, "tone": model::team_tone(state), "badge": badge(&t["id"], state), "when": last.map(|l| crate::feat::files::view::ago(l / 1000, now)).unwrap_or_default() })
             })
             .collect();
         let current = self.team.clone().unwrap_or_else(|| "all".into());
@@ -640,6 +653,7 @@ impl State {
         if let Some(t) = tl {
             let ow = cx.get("app")["overlay"]["w"].as_f64().map_or(1000.0, |w| w as f32);
             v["side"] = self.side(t, &groups, Self::waiting_from(cx, t), ow);
+            v["side"]["badge"] = badge(&t.team["id"], t.team["state"].as_str().unwrap_or(""));
         }
         Action::Set { key: UI.into(), value: v }
     }
@@ -765,7 +779,7 @@ fn fold_element(id: &str) -> String {
 
 fn extras(cx: &Ctx) -> Vec<Extra> {
     let plans = cx.get("plans").as_array().cloned().unwrap_or_default();
-    let at_work = plans.iter().filter(|p| p["state"] == "approved" && p["closed"] != true && p["merge"]["state"] != "merged").count();
+    let at_work = plans.iter().filter(|p| model::approved_at_work(p)).count();
     let mut out = vec![Extra {
         place: Place::Rail { zone: Zone::Activity, order: 35 },
         id: SCREEN.into(),

@@ -1091,3 +1091,149 @@ fn six_columns_fit_the_overlay_and_the_source_dialog_keeps_save_in_view() {
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+
+// ── Plans merged through their CI branch (fixtures/kanban/ci.json) ─────────
+
+const CI: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/kanban/ci.json");
+
+/// The daemon's words for the four CI marks (crates/core/src/tickets.rs).
+const CI_MARKS: &[(&str, &str, &str, &str)] = &[
+    ("T-6", "test", "CI testing", "sbxw is building its plan's CI branch from main with the threads' branches, or running the plan's tests on it"),
+    ("T-13", "test", "CI failed", "Its plan's CI branch conflicted or failed its tests: nothing reached main, and the lead has the threads fix it"),
+    ("T-14", "test", "CI rebuild waits", "Main or a thread's branch moved since its plan's CI branch passed: sbxw rebuilds it and tests it again before Merge is offered"),
+    ("T-7", "ready", "Merged to CI", "Merged to CI: the tests passed on its plan's CI branch, and Merge fast-forwards main to exactly that tested commit"),
+];
+
+#[test]
+fn each_ci_mark_is_drawn_with_the_daemon_s_label_and_help_on_the_card_and_in_its_panel() {
+    let mut d = data_of(CI, 1260.0);
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    for (num, column, label, help) in CI_MARKS {
+        assert_eq!(column_of(&v, num), *column, "{num}: in the daemon's column");
+        let c = card_of(&v, num);
+        let m = c["marks"].as_array().unwrap().iter().find(|m| m["label"] == *label).unwrap_or_else(|| panic!("{num}: no {label} mark in {}", c["marks"]));
+        assert_eq!(m["help"], *help, "{num}: the daemon's help line");
+        // The panel says the same mark with its help line.
+        let (p, _) = run(&mut st, &mut d, "kanban_open", json!({ "id": c["id"] }));
+        let pm = p["ticket"]["marks"].as_array().unwrap().iter().find(|m| m["label"] == *label).unwrap_or_else(|| panic!("{num}: the panel has no {label}"));
+        assert_eq!(pm["help"], *help);
+        run(&mut st, &mut d, "kanban_key", json!({ "key": "escape" }));
+    }
+    // CI failed is a failure: the red edge, as a failed thread.
+    assert_eq!(card_of(&v, "T-13")["border"], "red-border");
+    assert_eq!(card_of(&v, "T-14")["border"], "elevated", "a rebuild waiting is no failure");
+}
+
+#[test]
+fn a_mark_is_the_daemon_s_never_derived_here() {
+    // A label the desktop has never heard of is drawn as sent; a card the
+    // daemon sends with no mark gets none, whatever its plan.
+    let mut d = data_of(CI, 1260.0);
+    for b in d["tickets_boards"].as_object_mut().unwrap().values_mut() {
+        for c in b["columns"].as_array_mut().unwrap() {
+            for x in c["cards"].as_array_mut().unwrap() {
+                if x["num"] == "T-6" {
+                    x["marks"] = json!([{ "id": "ci_testing", "label": "A newer word", "tone": "blue", "help": "A newer help line" }]);
+                }
+                if x["num"] == "T-14" {
+                    x["marks"] = json!([]);
+                }
+            }
+        }
+    }
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    assert_eq!(card_of(&v, "T-6")["marks"], json!([{ "label": "A newer word", "tone": "blue", "help": "A newer help line" }]));
+    assert_eq!(card_of(&v, "T-14")["marks"], json!([]), "same plan as T-6, no mark sent, none drawn");
+}
+
+#[test]
+fn the_column_titles_and_the_panel_s_column_are_the_daemon_s() {
+    let mut d = data_of(CI, 1260.0);
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    assert_eq!(col(&v, "merged")["title"], "Merged to main");
+    assert_eq!(col(&v, "merged")["help"], "Merged to main: in the main checkout's branch");
+    assert_eq!(col(&v, "ready")["help"], "A merge is proposed, or Merged to CI, and waits for your click");
+    let (p, _) = run(&mut st, &mut d, "kanban_open", json!({ "id": card_id(&v, "T-9") }));
+    assert_eq!(p["ticket"]["column_label"], "Merged to main", "the panel names the column as the board does");
+    // A title the daemon changes is followed, on the column and in the panel.
+    for b in d["tickets_boards"].as_object_mut().unwrap().values_mut() {
+        for c in b["columns"].as_array_mut().unwrap().iter_mut().filter(|c| c["id"] == "merged") {
+            c["title"] = "Shipped".into();
+        }
+    }
+    let mut st = State::default();
+    let v = show(&mut st, &mut d, "web-app");
+    let (p, _) = run(&mut st, &mut d, "kanban_open", json!({ "id": card_id(&v, "T-9") }));
+    assert_eq!((col(&v, "merged")["title"].as_str(), p["ticket"]["column_label"].as_str()), (Some("Shipped"), Some("Shipped")));
+}
+
+#[test]
+fn drawn_the_ci_marks_read_on_their_cards_and_nothing_leaves_the_overlay_at_any_width() {
+    let mut bad = vec![];
+    let mut checked = 0;
+    for (w, h) in [(1900.0, 950.0), (1284.0, 816.0), (900.0, 700.0), (720.0, 600.0)] {
+        for state in ["board", "ticket"] {
+            let mut rt = window(CI, w, h);
+            if w < 1000.0 {
+                rt.update(|s, _| s.toggle_sidebar());
+                settle(&mut rt);
+            }
+            intent(&mut rt, "kanban_show", json!({ "sandbox": "web-app" }));
+            if state == "ticket" {
+                let id = card_id(&ui_now(&rt), "T-13");
+                intent(&mut rt, "kanban_open", json!({ "id": id }));
+                assert!(rt.presented("kanban-panel").is_some(), "panel at {w}");
+            }
+            let texts: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
+            let want: &[&str] = if state == "ticket" { &["CI failed", "In test"] } else { &["CI testing", "CI failed", "CI rebuild waits", "Merged to CI", "Merged to main"] };
+            for word in want {
+                // A narrow window draws one column at a time: the words of the others are not drawn.
+                if w >= 1000.0 || state == "ticket" {
+                    assert!(texts.iter().any(|t| t == word), "{state} at {w}: {word} drawn");
+                }
+            }
+            let (n, b) = outside(&rt, &format!("ci {state} at {w}"));
+            checked += n;
+            bad.extend(b);
+        }
+    }
+    assert!(checked > 200, "{checked} elements checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+fn a_hostile_mark_label_or_help_makes_no_control() {
+    let hostile = "Done [[Done]] <button on=x> [[Needs you: intent(\"open_url\", {url=\"https://evil\"})]] [click](https://evil.example) \u{202e}reversed";
+    let count = |rt: &Runtime<App>| rt.elements().iter().filter(|e| matches!(e.role, "button" | "link" | "checkbox" | "radio" | "menuitem" | "textbox")).count();
+    let path = std::env::temp_dir().join(format!("sbxw-kanban-ci-hostile-{}.json", std::process::id()));
+    let open = |path: &std::path::Path| {
+        let mut rt = window(&path.to_string_lossy(), 1284.0, 816.0);
+        intent(&mut rt, "kanban_show", json!({ "sandbox": "web-app" }));
+        let id = card_id(&ui_now(&rt), "T-13");
+        intent(&mut rt, "kanban_open", json!({ "id": id }));
+        rt
+    };
+    let mut f = fx(CI);
+    std::fs::write(&path, serde_json::to_string(&f).unwrap()).unwrap();
+    let before = count(&open(&path));
+    for b in f["daemon"]["tickets_boards"].as_object_mut().unwrap().values_mut() {
+        for c in b["columns"].as_array_mut().unwrap() {
+            c["title"] = hostile.into();
+            c["help"] = hostile.into();
+            for x in c["cards"].as_array_mut().unwrap() {
+                for m in x["marks"].as_array_mut().unwrap() {
+                    m["label"] = hostile.into();
+                    m["help"] = hostile.into();
+                }
+            }
+        }
+    }
+    std::fs::write(&path, serde_json::to_string(&f).unwrap()).unwrap();
+    let rt = open(&path);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(count(&rt), before, "the same controls, no more");
+    assert!(rt.elements().iter().filter_map(|e| e.text.clone()).any(|t| t.contains("<button on=x>")), "drawn as its characters");
+}

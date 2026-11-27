@@ -1187,7 +1187,10 @@ impl State {
         let groups = cx.get("app")["groups"].clone();
         let cols = model::columns(&self.board, &groups, &self.pages, self.focus.as_deref());
         let col = if cols.iter().any(|c| c["id"] == self.col.as_str()) { self.col.clone() } else { cols.iter().find(|c| c["count"].as_u64().unwrap_or(0) > 0).and_then(|c| c["id"].as_str()).unwrap_or("planned").to_string() };
-        let panel = self.open.as_deref().and_then(|id| self.card(id)).map(|c| model::panel(c, self.view.as_ref(), &self.previews, held(cx).as_deref()));
+        let panel = self.open.as_deref().and_then(|id| self.card(id)).map(|c| {
+            let column = self.board["columns"].as_array().and_then(|cs| cs.iter().find(|x| x["id"] == c["column"]));
+            model::panel(c, column, self.view.as_ref(), &self.previews, held(cx).as_deref())
+        });
         let mut sandboxes = vec![json!({ "id": "", "label": "All sandboxes" })];
         sandboxes.extend(cx.get("sandboxes").as_array().into_iter().flatten().filter_map(|s| s["name"].as_str()).map(|n| json!({ "id": n })));
         let now = self.board["now"].as_u64().unwrap_or_else(crate::feat::now_ms);
@@ -1438,5 +1441,5 @@ fn empty_board(scope: &str) -> J {
             json!({ "id": id, "title": t, "tone": tone, "help": "", "empty": if *id == "planned" { "No ticket planned: add one." } else { "Nothing here." }, "count": 0, "cards": [], "older": 0 })
         })
         .collect();
-    json!({ "scope": scope, "columns": cols, "counts_line": "0 planned · 0 in progress · 0 in test · 0 ready to merge · 0 merged", "tickets": 0, "bytes": 0 })
+    json!({ "scope": scope, "columns": cols, "counts_line": "0 planned · 0 in progress · 0 in test · 0 ready to merge · 0 merged to main", "tickets": 0, "bytes": 0 })
 }

@@ -2534,6 +2534,35 @@ above the view scrolls it back into view (`ScrollIntoView`). At the very end
 of the conversation a fold removes content under the view: the rows come
 down together by that much.
 
+**Merge states.** A team whose plan has a merge says its status with the
+daemon's own word (`merge_status.word`, from the plans the app reads; its
+`detail`, and why Merge is not offered, in the tooltip), beside the picker
+and in each row of the picker's list, instead of the team's state:
+"Testing the CI branch" and "Building the CI branch" blue (work under way,
+as a running team), "Merged to CI" and "Merge proposed" purple (waiting for
+the person's Merge, as the Merge proposed chip), "CI rebuild waits" and
+"Main moved: CI rebuild waits" amber (waiting, as a blocked thread), "CI
+failed" and "Merge failed" red, "Merged to main" green (`model::merge_tone`,
+`model::merge_badge`). A team with no merge, or an older daemon with no
+`merge_status`, shows its state as before. A long word narrows the picker
+down to its least width (104 pt); past that the word is drawn first in the
+summary, under the title (`board-chip-state`), never outside the overlay.
+A plan in any CI state is at work (the rail's count, a sandbox's current
+team: `model::plan_at_work`); Merged to main is not. The **CI run** is part
+of the test rows: each `ci_step` event (built, passed, failed, stale,
+rebuild, closed) is a centred tinted line like a test job, labelled with
+the merge status the step led to in the daemon's words ("Merged to CI",
+"Main moved: CI rebuild waits"; a rebuild "Rebuilding the CI branch"), the
+daemon's line after it ("main moved from 7e83ca2 to 32f28ea: rebuilding
+sbxw/ci-p"); the battery sbxw asks on the CI branch (`test_job` with asker
+`sbxw`) reads "CI tests passed after a retry", "on the CI branch, asked by
+sbxw · 2 attempts" (no attempt for a reused result); `merge_finished` says
+the daemon's word and the CI branch ("Merged to main from sbxw/ci-p: a,
+b"). All of it is data, drawn as text. Fixtures: `fixtures/board/ci.json`
+(opened on the team testing after a rebuild) and its views `ci-building`,
+`ci-merged-ci`, `ci-failed`, `ci-stale`, `ci-main`, one team per state,
+written by `gen.py` beside `basic.json`.
+
 Read only: every intent is Direct and reads; links go to the plan dialog,
 the Requests panel, a terminal, Commits, Worktrees, the Threads panel, the
 Sessions. Agent text is drawn in the prose face with pills, never as a
@@ -2565,18 +2594,25 @@ opened by the switch or by the top bar's Kanban button (`kanban_toggle`),
 with the same switch (`kanban-view`) and the sandbox's scope capsule in its
 title (`kanban-sandbox`, All sandboxes first). Five columns side by side
 (`kanban-lane-<id>`: planned, progress, test, ready, merged), each with its
-count and its cards scrolling inside it (`kanban-scroll-<id>`), 30 cards a
+count and its cards scrolling inside it (`kanban-scroll-<id>`); each
+column's title and help are the daemon's (`columns[].title`, `help`:
+"Merged to main"), never the desktop's, 30 cards a
 page (`kanban-more-<id>`, four pages at most), Merged's older ones behind
 `kanban-older`. Under 900 pt one column at a time, picked with
 `kanban-colpick`. A card (`kanban-row-<key>`, the daemon's key made safe):
 its T-number (or "thread", dim, for a thread with no ticket), its age, its
 title on two lines (the daemon's `title_short` under 300 pt a column, else
 `title_long`: one comparison, no string work), its marks on a wrapping line
-under the title (priority, proposed, blocked, failed, merging, merge failed,
-plan refused, team ended, files, validated), its thread's dot and name, the
-sandbox's colour square in All; a red edge for failed or refused work. A
+under the title, exactly as the daemon sends them (`marks[]`: its label on
+the card, its help line in the tooltip, its tone; priority, proposed,
+blocked, failed, merging, merge failed, plan refused, team ended, files,
+validated, and the CI marks "CI testing", "CI rebuild waits", "CI failed",
+"Merged to CI"; the desktop never derives a mark from a plan's state), its
+thread's dot and name, the sandbox's colour square in All; a red edge for
+failed or refused work and CI failed. A
 press opens the ticket as a panel over the board (`kanban-panel`, at most
-640 pt, pinned right): column and marks, title, description (prose face,
+640 pt, pinned right): its column (the board's title for it), its marks
+with the same help lines, title, description (prose face,
 pills), pictures previewed in place (their bytes read by the feature,
 decoded by the core: `Action::Image`), files as chips (a press saves it to
 Downloads and shows it), priority and Move up / Move down / To the top for a
@@ -2637,7 +2673,11 @@ Backlog column, a 404 on the source route) leaves the Kanban as it was: no
 line, five columns. Fixtures: `fixtures/kanban/backlog.json` (source on),
 `source-off`, `source-syncing`, `source-failed`, written by
 `fixtures/kanban/backlog.py` from `basic.json` (which stays the older
-daemon's).
+daemon's). `fixtures/kanban/ci.json`, written by `ci.py` from `basic.json`:
+today's column words ("Merged to main") and a card with each CI mark (T-6
+CI testing, T-13 CI failed, T-14 CI rebuild waits in In test, T-7 and T-8
+Merged to CI in Ready to merge), the daemon's label and help copied from
+`crates/core/src/tickets.rs`.
 
 | Intent | Args | Effect |
 |---|---|---|
