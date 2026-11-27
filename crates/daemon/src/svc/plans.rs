@@ -111,6 +111,38 @@ impl App {
         self.plans.lock().unwrap().get(id).cloned()
     }
 
+    /// Every plan as `GET /api/plans` answers it: the plan itself, plus the
+    /// `merge_status` a screen draws of its merge ([`App::merge_status_of`]).
+    /// Not [`App::plan_view`]: that one reads the test queue, the team log
+    /// and every thread's session, which this list, fetched at every `plan`
+    /// event, does not need.
+    pub fn plans_listed(&self) -> Vec<serde_json::Value> {
+        self.plans_list()
+            .iter()
+            .map(|p| {
+                let mut v = serde_json::to_value(p).unwrap_or_default();
+                if let Some(s) = self.merge_status_of(p) {
+                    v["merge_status"] = s;
+                }
+                v
+            })
+            .collect()
+    }
+
+    /// What a screen draws of a plan's merge, as is (`plans::ci`), and why a
+    /// merge proposed as is did not go through a CI branch. `None` without a
+    /// merge.
+    pub fn merge_status_of(&self, plan: &Plan) -> Option<serde_json::Value> {
+        let m = plan.merge.as_ref()?;
+        let mut v = serde_json::to_value(sbxw_core::plans::merge_status(m)).unwrap_or_default();
+        if m.ci.is_none() && plan.variant.is_split() && plan.approved_tests.is_some() {
+            if let Err(why) = self.ci_applies(plan, &m.order) {
+                v["no_ci_because"] = why.into();
+            }
+        }
+        Some(v)
+    }
+
     /// A plan as the lead sees it, plus whether each thread's session is
     /// running — the one fact a report cannot carry.
     pub fn plan_view(&self, plan: &Plan) -> serde_json::Value {
@@ -123,13 +155,8 @@ impl App {
         v["numbers"] = sbxw_core::team::plan_numbers(plan, &log, c);
         // What a screen draws of the merge, as is (`plans::ci`), and why a
         // merge proposed as is did not go through a CI branch.
-        if let Some(m) = &plan.merge {
-            v["merge_status"] = serde_json::to_value(sbxw_core::plans::merge_status(m)).unwrap_or_default();
-            if m.ci.is_none() && plan.variant.is_split() && plan.approved_tests.is_some() {
-                if let Err(why) = self.ci_applies(plan, &m.order) {
-                    v["merge_status"]["no_ci_because"] = why.into();
-                }
-            }
+        if let Some(s) = self.merge_status_of(plan) {
+            v["merge_status"] = s;
         }
         if let Ok(sb) = SandboxRef::parse(&plan.sandbox) {
             if let Some(threads) = v.get_mut("threads").and_then(|t| t.as_array_mut()) {
@@ -1277,6 +1304,10 @@ mod merge_close_tests;
 #[cfg(test)]
 #[path = "plans_ci_tests.rs"]
 mod ci_tests;
+
+#[cfg(test)]
+#[path = "plans_list_tests.rs"]
+mod list_tests;
 
 #[cfg(test)]
 mod tests {

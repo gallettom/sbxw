@@ -1,0 +1,72 @@
+{
+  "about": "GET /api/plans as the daemon answers it for a split plan whose CI branch is being built. Written by sbxw-daemon's the_desktops_route_ci_building_fixture_is_this_routes_answer; do not edit by hand.",
+  "daemon": {
+    "plans": [
+      {
+        "approved_tests": {
+          "command": "pnpm test && cargo test --workspace",
+          "timeout_minutes": 60
+        },
+        "created_ms": 1763290000000,
+        "id": "p-1",
+        "justification": "The three areas live in different folders, so a branch each merges cleanly.",
+        "lead": "web-app lead",
+        "merge": {
+          "base": null,
+          "ci": {
+            "branch": "sbxw/ci-p-1",
+            "builds": 1,
+            "run": 1,
+            "worktree": ".sbxw-worktrees/.ci-p-1"
+          },
+          "note": "api first: the web page depends on its routes.",
+          "order": [
+            "api-routes",
+            "web-orders",
+            "docs"
+          ],
+          "results": [],
+          "state": "ci_building"
+        },
+        "merge_status": {
+          "can_merge": false,
+          "ci": true,
+          "detail": "Merging the threads into sbxw/ci-p-1",
+          "why_not": "sbxw is building sbxw/ci-p-1 from main with the threads' branches; the tests run next, then Merge is offered",
+          "word": "Building the CI branch"
+        },
+        "sandbox": "web-app",
+        "state": "approved",
+        "summary": "Orders v2: the API routes, the web page that uses them, and their docs, in three threads that do not touch the same files.",
+        "threads": [
+          {
+            "goal": "Add the /v2/orders routes to the API.",
+            "name": "api-routes",
+            "scope": "api/src/routes/v2/",
+            "state": "done",
+            "summary": "api-routes done: committed on sbxw/api-routes, tests pass",
+            "updated_ms": 0
+          },
+          {
+            "goal": "Build the orders page in the web app against the new routes.",
+            "name": "web-orders",
+            "scope": "web/src/pages/orders/",
+            "state": "done",
+            "summary": "web-orders done: committed on sbxw/web-orders, tests pass",
+            "updated_ms": 0
+          },
+          {
+            "goal": "Document the v2 orders API in docs/api/orders.md.",
+            "name": "docs",
+            "scope": "docs/api/orders.md",
+            "state": "done",
+            "summary": "docs done: committed on sbxw/docs, tests pass",
+            "updated_ms": 0
+          }
+        ],
+        "updated_ms": 1763290000000,
+        "variant": "split"
+      }
+    ]
+  }
+}
