@@ -397,16 +397,6 @@ local function ci_view(mv)
     end
     table.insert(out, column(rows))
   end
-  if mv.tests then
-    table.insert(out, text{ mv.tests, size = "sm", color = mv.tests_tone or "text-muted", wrap = true, key = "ci-tests" })
-    for i, a in ipairs(mv.attempts or {}) do
-      table.insert(out, text{ a.line, size = "sm", color = a.tone, key = "ci-attempt-" .. i })
-      if a.tail and a.tail ~= "" then
-        table.insert(out, column{ w = "full", pad = 8, radius = "sm", fill = "surface-alt", key = "ci-tail-" .. i,
-          text{ a.tail, size = "sm", mono = true, wrap = true, color = "text-soft", w = "full" } })
-      end
-    end
-  end
   local f = mv.failure
   if f then
     local box = { gap = 4, w = "full", pad = 8, radius = "sm", fill = "red-tint", border = "red", key = "ci-failure",
@@ -420,6 +410,16 @@ local function ci_view(mv)
       table.insert(box, text{ f.text, size = "sm", mono = true, wrap = true, key = "ci-failure-text" })
     end
     table.insert(out, column(box))
+  end
+  if mv.tests then
+    table.insert(out, text{ mv.tests, size = "sm", color = mv.tests_tone or "text-muted", wrap = true, key = "ci-tests" })
+    for i, a in ipairs(mv.attempts or {}) do
+      table.insert(out, text{ a.line, size = "sm", color = a.tone, key = "ci-attempt-" .. i })
+      if a.tail and a.tail ~= "" then
+        table.insert(out, column{ w = "full", pad = 8, radius = "sm", fill = "surface-alt", key = "ci-tail-" .. i,
+          text{ a.tail, size = "sm", mono = true, wrap = true, color = "text-soft", w = "full" } })
+      end
+    end
   end
   if mv.click_refused then table.insert(out, text{ mv.click_refused, color = "amber", wrap = true, key = "ci-click-refused" }) end
   if mv.ff then table.insert(out, text{ mv.ff, size = "sm", wrap = true, key = "merge-ff" }) end
