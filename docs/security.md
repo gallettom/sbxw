@@ -227,6 +227,14 @@ page instead of the chat.
   notice says it was pasted, or why not; a second paste while one uploads is
   refused. Files dragged onto a pane still go through their upload dialog,
   with its own "Do not ask again".
+- **Words written in Sessions' composer** (desktop app): masked by your
+  anonymise rules, then typed into the session at once, with no dialog, from
+  your own Send press or Return in the composer. The core accepts this send
+  only from your own press on the Sessions screen (its risk is Press): never
+  from an agent's text, a feature's own chain, a notice, a shortcut, the
+  palette or Jarvis. It is refused while something covers the view, while a
+  Jarvis proposal waits, or while the session waits on a menu. Words with
+  attached files still go through one dialog that shows every file.
 - **Virtual Mac** (`sbxw:terminal-mac`, opt-in): your approval is needed to
   create or boot the VM, to resume a paused one, to lend a running VM that
   sbxw did not start itself, and to publish a port to it. Clicks, typing and

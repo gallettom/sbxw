@@ -1300,6 +1300,10 @@ fn boxed(e: El, st: &Style) -> El {
     if let Some(g) = st.gap {
         e = e.gap(g);
     }
+    // The selectable texts inside: one selection, across them.
+    if st.selection_group {
+        e = e.selection_group(true);
+    }
     e = match st.align {
         Some(Align::Start) => e.items_start(),
         Some(Align::Center) => e.items_center(),
@@ -1343,6 +1347,10 @@ impl Build<'_> {
                 // (it shrinks before its siblings are pushed out).
                 if st.truncate {
                     t = t.truncate().shrink();
+                }
+                // Read-only text the person may select and copy (off by default).
+                if st.selectable {
+                    t = t.selectable(true);
                 }
                 t
             }
@@ -1597,7 +1605,11 @@ impl Build<'_> {
                     Rc::new(move |s: &mut S, url: &str, _tx: &mut rune::Tx| fire(s, &name, &on, &arg, &J::String(url.to_string()))) as Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>
                 });
                 let k = key.clone().unwrap_or_else(|| "md".into());
-                crate::markdown::view::<S>(&n.text, &look, &k, on_link)
+                if st.selectable {
+                    crate::markdown::view_selectable::<S>(&n.text, &look, &k, on_link)
+                } else {
+                    crate::markdown::view::<S>(&n.text, &look, &k, on_link)
+                }
             }
             Kind::Textarea => {
                 let id = n.id.clone().unwrap_or_default();

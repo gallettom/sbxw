@@ -223,6 +223,12 @@ pub struct Model {
     pub conv: super::conv::Store,
     /// The composer's completion list, for one sandbox ([`super::cmds`]).
     pub cmds: Option<super::cmds::Cmds>,
+    /// Previews of the pictures the person sent to the session followed ([`super::pics`]).
+    pub pics: super::pics::Pics,
+    /// Words sent without the dialog (`monitor_say`), by number (`say:<n>`):
+    /// the card and the words the press asked for, until the push answers.
+    pub saying: BTreeMap<u64, (String, String)>,
+    pub say_seq: u64,
 }
 
 /// The rail's Team leads, applied to Sessions: the core's one state

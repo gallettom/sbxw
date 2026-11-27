@@ -144,7 +144,8 @@ pub enum Ask {
 /// call on the person's click). Anything else is refused, nothing runs.
 pub fn admit(risk: Risk, name: &str, actions: Vec<Action>) -> Result<Vec<Action>, String> {
     match risk {
-        Risk::Direct => Ok(actions),
+        // Press: its origin was checked before the feature ran (`feature_intent`).
+        Risk::Direct | Risk::Press => Ok(actions),
         Risk::Approval(_) => match actions.as_slice() {
             [Action::Confirm(_)] | [Action::Prepare(_)] => Ok(actions),
             _ => Err(format!("{name} needs the person's approval, but its feature answered without the core's dialog: refused")),
@@ -183,6 +184,11 @@ impl App {
         let Some((f, spec)) = feat::intent(a.name) else {
             return self.notify(format!("{from}: unknown intent {}", a.name), true);
         };
+        // A press-only intent: from the person's own press on its feature's
+        // own screen, else refused here, before any of the feature's code runs.
+        if spec.risk == Risk::Press && !(self.pressed(from) && f.screens.iter().any(|s| s.name == from)) {
+            return self.notify(format!("{}: {} runs only from your own press on its screen: refused", f.name, a.name), true);
+        }
         let data = self.feat_ctx_data();
         let answer = (f.act)(&Ctx { data: &data }, &a).and_then(|acts| admit(spec.risk, a.name, acts));
         match answer {

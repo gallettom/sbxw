@@ -2410,7 +2410,7 @@ impl Host for App {
         self.wiring.start_and_send = intents.iter().any(|i| matches!(i, Intent::StartJarvis)) && intents.iter().any(|i| matches!(i, Intent::SendToJarvis { .. }));
         for i in intents {
             match i.risk() {
-                Risk::Direct => self.run_intent(screen, i),
+                Risk::Direct | Risk::Press => self.run_intent(screen, i),
                 Risk::Approval(asks) => match i {
                     // The screen only opens the core's dialog; the click there approves.
                     Intent::ApproveProposal { id } => self.show_proposal(&id),

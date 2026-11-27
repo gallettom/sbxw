@@ -578,13 +578,27 @@ mod tests {
         assert!(rt.state.dictation.on.is_none() && rt.state.dictation.pending.is_none());
         assert_eq!(draft(&mut rt), "Hi, please send the report to [email] today");
         assert!(!sent(&rt), "dictation opens no Confirm");
-        // Send is still the person's press, and its one Confirm shows the
-        // screen's draft, which has the words (and no Enter).
-        tap(&mut rt, "monitor-send");
-        frames(&mut rt, 6);
-        let body = rt.state.feats.dialog.as_ref().and_then(|d| d.confirm.as_ref()).map(|c| c.call.body.to_string()).unwrap_or_default();
-        assert!(body.contains("Hi, please send the report to [email] today"), "{body}");
-        assert!(!body.contains("\\n"), "no Enter: {body}");
+        // Send is still the person's press: words alone go without a dialog
+        // (`monitor_say`). What goes is the screen's draft, with the dictated
+        // (masked) words and no Enter: the press hands it to the masking call
+        // (held by the feature under that press until the push answers), and
+        // the push follows once, with no Confirm opened.
+        let said = || crate::feat::monitor::STATE().lock().unwrap().saying.values().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+        let pushes = || crate::feat::monitor::STATE().lock().unwrap().sent.values().sum::<u64>();
+        let before = pushes();
+        let (x, y) = rt.find("monitor-send").expect("Send drawn");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.05);
+        assert_eq!(said(), ["Hi, please send the report to [email] today"], "the draft goes to the masking, no Enter");
+        assert!(!sent(&rt), "no Confirm for words alone");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while pushes() == before && std::time::Instant::now() < end {
+            frames(&mut rt, 1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(pushes(), before + 1, "pushed once: {:?}", rt.state.notice);
+        assert!(said().is_empty() && !sent(&rt), "nothing more on its way, no Confirm");
     }
 
     /// The microphone: press, speak, press again; Escape cancels.

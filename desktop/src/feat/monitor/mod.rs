@@ -14,10 +14,14 @@
 //!   view left deletes its subscription.
 //! * **Answering.** An option press is the relay's `agent_pick` (the
 //!   Requests panel's path, the same picks), only for a session the daemon
-//!   can answer. Typed words are `monitor_send`, of risk Approval like
-//!   `follow_send`: masked, then the core's dialog shows them in full with
-//!   the session they go to, and only Send there types them in
-//!   (`POST /api/chat/push`).
+//!   can answer. Words alone are `monitor_say`, of risk Press: the core
+//!   runs it only from the person's own Send press or Enter in the composer
+//!   (never a feature's chain, an input's per-keystroke action, a notice, a
+//!   shortcut, the palette), then they are masked and typed in at once
+//!   (`POST /api/chat/push`), with no dialog (the person's decision). Words
+//!   with files are `monitor_send`, of risk Approval like `follow_send`:
+//!   masked, then the core's dialog shows the words, each file and the
+//!   session, and only Send there uploads them and types the words in.
 //! * **The gate.** Nothing is sent while anything sits over the panes and
 //!   the overlay (`data.app.covered`: the core's dialog, a modal, Jarvis's
 //!   proposal, the palette) or while a Jarvis proposal waits: checked here,
@@ -25,11 +29,16 @@
 //! * **Agent text is data.** Prompts, replies, steps, questions and options
 //!   are drawn as text; an option's act is its index, never its words; a
 //!   conversation row's only act is its own fold, by its id.
+//! * **Pictures sent.** The person's own prompts that name a picture sbxw
+//!   uploaded show it small ([`pics`]): only those paths, only in their
+//!   prompts, read once each through the Files view's route, forgotten with
+//!   the session.
 
 pub mod attach;
 pub mod cmds;
 pub mod conv;
 pub mod model;
+pub mod pics;
 #[cfg(test)]
 mod tests;
 
@@ -58,6 +67,7 @@ pub const FEATURE: Feature = Feature {
     on_answer: Some(on_answer),
     on_files: Some(on_files),
     on_dismiss: Some(on_dismiss),
+    on_bytes: Some(on_bytes),
     standin: Some(standin),
     ..Feature::EMPTY
 };
@@ -87,6 +97,12 @@ pub const INTENTS: &[Spec] = &[
     d("monitor_attach", &[("key", Arg::Str, true)], "The system's file dialog, to attach a file to what you write to that session (the one shown). The file waits as a chip under the box until Send; files dropped on Sessions or a picture pasted there are attached the same way. Refused while the composer is."),
     d("monitor_commands", &[("key", Arg::Str, true)], "Reads the skills and slash commands of that session's sandbox for the composer's completion list (once per sandbox; a stopped sandbox is not started). View state only: nothing is sent."),
     d("monitor_attach_remove", &[("key", Arg::Str, true), ("id", Arg::Int(1, 1_000_000_000), true)], "Removes attached file `id` from that session's waiting files."),
+    Spec {
+        name: "monitor_say",
+        risk: Risk::Press,
+        args: &[("key", Arg::Str, true), ("text", Arg::Str, true)],
+        doc: "Words alone for the session shown, sent at once: only from the person's own Send press or Enter in its composer (the core refuses any other origin). Masked, then typed into the session as one message. Refused with files attached (Send's dialog takes those), while the session waits on a menu, while anything covers the view or a Jarvis proposal waits.",
+    },
     Spec {
         name: "monitor_send",
         risk: Risk::Approval("Send words to a sandbox's agent"),
@@ -149,6 +165,14 @@ pub fn held(cx: &Ctx) -> Option<String> {
 }
 
 fn on_event(cx: &Ctx, name: &str, info: &J) -> Vec<Action> {
+    let mut out = on_event_in(cx, name, info);
+    if name == "session" {
+        out.extend(settle(&mut STATE().lock().unwrap(), cx));
+    }
+    out
+}
+
+fn on_event_in(cx: &Ctx, name: &str, info: &J) -> Vec<Action> {
     let mut m = STATE().lock().unwrap();
     if name == "history" {
         // A nudge (no text): only the session followed is read, never another.
@@ -277,7 +301,36 @@ fn conv_view(m: &mut Model, key: &str, now: u64) -> J {
     let bg = model::is_background(&c.info);
     v["partial"] = h.partial.as_deref().map_or(J::Null, |p| conv::partial_line(p, &sb, bg).into());
     v["rev"] = h.rev.into();
+    // The person's prompts with the pictures they sent, as far as read.
+    m.pics.annotate(&id, &mut v["rows"]);
     v
+}
+
+/// The previews follow the session followed and its drawn rows
+/// ([`pics::Pics::sync`]); the view handed over again when what it draws
+/// changed.
+fn settle(m: &mut Model, cx: &Ctx) -> Vec<Action> {
+    let sub = if shown(cx) { m.conv.sub.clone() } else { None };
+    let rows = match &sub {
+        Some(id) => m.conv.logs.get_mut(id).filter(|h| h.loaded).and_then(|h| h.rows(wall_ms() / 1000)["rows"].as_array().cloned()).unwrap_or_default(),
+        None => vec![],
+    };
+    let (mut out, changed) = m.pics.sync(sub.as_ref(), &rows);
+    if changed && shown(cx) {
+        out.push(view_action(m, cx));
+    }
+    out
+}
+
+/// A picture read for a preview answered (`pic:<n>`).
+fn on_bytes(cx: &Ctx, call: &Call, r: Result<(u16, Vec<u8>, String), String>) -> Vec<Action> {
+    let Some(n) = call.tag.strip_prefix("pic:").and_then(|n| n.parse::<u64>().ok()) else { return vec![] };
+    let mut m = STATE().lock().unwrap();
+    let Some(mut out) = m.pics.got(n, r) else { return vec![] };
+    if shown(cx) {
+        out.push(view_action(&mut m, cx));
+    }
+    out
 }
 
 fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
@@ -291,7 +344,9 @@ fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> 
         return vec![];
     }
     if let Some(rest) = call.tag.strip_prefix("hist:") {
-        return history_answer(&mut m, cx, rest, r);
+        let mut out = history_answer(&mut m, cx, rest, r);
+        out.extend(settle(&mut m, cx));
+        return out;
     }
     if let Some(sb) = call.tag.strip_prefix("cmds:") {
         let Some(c) = m.cmds.as_mut().filter(|c| c.sandbox == sb) else { return vec![] };
@@ -304,13 +359,19 @@ fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> 
     if let Some(n) = call.tag.strip_prefix("attach:").and_then(|n| n.parse::<u64>().ok()) {
         return uploaded(&mut m, cx, n, r);
     }
+    if let Some(n) = call.tag.strip_prefix("say:").and_then(|n| n.parse::<u64>().ok()) {
+        return said(&mut m, cx, n, r);
+    }
     if let Some(key) = call.tag.strip_prefix("send:") {
+        // A direct send's words have arrived or failed: no longer on their way.
+        m.saying.retain(|_, (k, _)| k != key);
         if ok {
             // The draft has left: the screen empties it, and its files went with it.
             *m.sent.entry(key.to_string()).or_insert(0) += 1;
             let gone = m.att.remove(key).unwrap_or_default();
             let mut out = vec![Action::notice(format!("{}: sent", call.what)), view_action(&mut m, cx)];
             out.extend(forget(&gone));
+            out.extend(attach::unshow(&gone));
             return out;
         }
         let kept = if m.att.get(key).is_some_and(|v| !v.is_empty()) { " Your words and files are still in the box; the files already uploaded go with the next Send." } else { " Your words are still in the box." };
@@ -359,6 +420,13 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
         "monitor_open" | "monitor_toggle" => out.extend(follow(&mut m, cx, true)),
         n if n.starts_with("monitor_") => out.extend(follow(&mut m, cx, shown(cx))),
         _ => {}
+    }
+    // Leaving the view or another session: the previews follow.
+    let leaving = matches!(a.name, "monitor_terminal") || (a.name == "monitor_toggle" && cx.data["app"]["base"] == SCREEN);
+    if leaving {
+        out.extend(m.pics.clear());
+    } else {
+        out.extend(settle(&mut m, cx));
     }
     Ok(out)
 }
@@ -478,6 +546,7 @@ fn act_on(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             Ok(vec![Action::Intent { name: "agent_pick".into(), args }])
         }
         "monitor_send" => send(&mut m, cx, a),
+        "monitor_say" => say(&mut m, cx, a),
         "monitor_commands" => {
             let k = a.req("key");
             let sb = m.cards.get(k).and_then(|c| c.info["sandbox"].as_str()).filter(|s| !s.is_empty()).map(str::to_string).ok_or_else(|| format!("{k} is not a session Sessions lists"))?;
@@ -514,6 +583,7 @@ fn act_on(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             let gone = list.remove(i);
             let mut out = vec![view_action(&mut m, cx)];
             out.extend(forget(std::slice::from_ref(&gone)));
+            out.extend(attach::unshow(std::slice::from_ref(&gone)));
             Ok(out)
         }
         other => Err(format!("{other}: not a Sessions intent")),
@@ -538,6 +608,68 @@ fn reachable(m: &Model, cx: &Ctx, key: &str) -> Result<(String, Option<String>),
         return Err(format!("Not sent: {sb} is not running."));
     }
     Ok((sb, thread))
+}
+
+/// Words alone, from the person's press (the core checked its origin,
+/// `Risk::Press`): the same checks as [`send`], then masked; the answer
+/// pushes the masked words ([`said`]). Nothing here comes from data.
+fn say(m: &mut Model, cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
+    if let Some(why) = held(cx) {
+        return Err(why);
+    }
+    let key = a.req("key");
+    let text = a.s("text").unwrap_or("").trim();
+    if text.is_empty() {
+        return Err("Nothing to send".into());
+    }
+    if m.selected().as_deref() != Some(key) {
+        return Err("Not sent: that session is not the one shown.".into());
+    }
+    if m.att.get(key).is_some_and(|v| !v.is_empty()) {
+        return Err("Not sent: files are attached; Send shows them in its dialog first.".into());
+    }
+    if m.jobs.values().any(|j| j.key == key && j.sent) || m.saying.values().any(|(k, _)| k == key) {
+        return Err("Not sent: your last message is still on its way. Your words are still in the box.".into());
+    }
+    let (sb, thread) = reachable(m, cx, key)?;
+    m.say_seq += 1;
+    let n = m.say_seq;
+    m.saying.insert(n, (key.to_string(), text.to_string()));
+    let to = model::who(&sb, thread.as_deref());
+    Ok(vec![Action::Call(Call::post("/api/voice/anonymise", json!({ "text": text }), format!("mask personal data before it goes to {to}")).quiet().timeout(30).tag(&format!("say:{n}")))])
+}
+
+/// The masking of words sent without the dialog answered: the masked words
+/// pushed to the session, as the dialog's Send does, if it still takes
+/// typed words; else why, the words kept in the box.
+fn said(m: &mut Model, cx: &Ctx, n: u64, r: Result<(u16, J), String>) -> Vec<Action> {
+    let Some((key, _)) = m.saying.get(&n).cloned() else { return vec![] };
+    let kept = " Your words are still in the box.";
+    let safe = match &r {
+        Ok((c, b)) if (200..300).contains(c) && b["ok"] != false => b["text"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string),
+        _ => None,
+    };
+    let fail = |m: &mut Model, why: String| {
+        m.saying.remove(&n);
+        vec![Action::error(format!("{why}{kept}")), view_action(m, cx)]
+    };
+    let Some(safe) = safe else {
+        let why = match &r {
+            Ok((_, b)) if b["ok"] == false => format!("Not sent: the masking of personal data failed ({}).", b["error"].as_str().unwrap_or("no reason given")),
+            Ok((c, _)) if !(200..300).contains(c) => format!("Not sent: the masking of personal data failed (the daemon answered {c})."),
+            Ok(_) => "Not sent: the masking of personal data gave nothing back.".into(),
+            Err(e) => format!("Not sent: the masking of personal data did not run ({e})."),
+        };
+        return fail(m, why);
+    };
+    // The session as it is now, not as it was at the press.
+    match reachable(m, cx, &key) {
+        Err(e) => fail(m, e),
+        Ok((sb, thread)) => {
+            let to = model::who(&sb, thread.as_deref());
+            vec![Action::Call(push_call(&sb, thread.as_deref(), safe, &key, &to))]
+        }
+    }
 }
 
 /// Typed words and the session's attached files: checked, the words
@@ -822,6 +954,7 @@ fn on_files(cx: &Ctx, inc: Incoming) -> Vec<Action> {
     }
     let mut notes = vec![];
     let mut left: Vec<std::path::PathBuf> = vec![];
+    let mut shows: Vec<Action> = vec![];
     match inc {
         Incoming::Files(list) => {
             for p in list {
@@ -848,12 +981,16 @@ fn on_files(cx: &Ctx, inc: Incoming) -> Vec<Action> {
                 m.att_seq += 1;
                 m.pastes += 1;
                 let (id, n) = (m.att_seq, m.pastes);
-                m.att.entry(key.clone()).or_default().push(Att::of_png(id, n, bytes));
+                let mut a = Att::of_png(id, n, bytes);
+                // Its thumbnail on the chip, from the bytes in memory; shown before the view that names it.
+                shows.extend(a.show_thumb());
+                m.att.entry(key.clone()).or_default().push(a);
             }
         }
     }
     notes.dedup();
     let mut out: Vec<Action> = notes.into_iter().map(Action::error).collect();
+    out.extend(shows);
     if !left.is_empty() {
         out.push(Action::ForgetFiles(left));
     }

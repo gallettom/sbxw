@@ -54,6 +54,7 @@ pub fn intents_json() -> J {
             let mut v = json!({ "name": s.name, "args": args, "doc": s.doc });
             match s.risk {
                 Risk::Direct => v["risk"] = "direct".into(),
+                Risk::Press => v["risk"] = "press".into(),
                 Risk::Approval(asks) => {
                     v["risk"] = "approval".into();
                     v["asks"] = asks.into();
