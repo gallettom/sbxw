@@ -2451,3 +2451,425 @@ fn the_composer_keys_in_the_window() {
     assert_eq!(focused(&mut rt), "monitor-compose", "a click keeps the keyboard in the box");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- Previews of the pictures the person sent (pics.rs) ----
+
+/// A PNG of invented pixels, `w` x `h`.
+fn png_of(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x % 256) as u8, (y % 256) as u8, 120, 255]));
+    let mut out = vec![];
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+    out
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Puts a picture in the stand-in sandbox at `path`.
+fn put_pic(d: &mut J, path: &str, bytes: &[u8]) {
+    d["files_content"][path] = json!({ "$raw_hex": hex(bytes), "$type": "image/png" });
+}
+
+/// [`serve`], and the picture reads too: each answered by the stand-in (the
+/// Files view's `fs/file`) through `on_bytes`, its path noted in `pic_calls`;
+/// `pic_answers[path]` (`[code, text]`) answers one instead.
+fn serve_all(d: &mut J, acts: Vec<Action>) -> Vec<Action> {
+    let mut out = vec![];
+    let mut todo = acts;
+    for _ in 0..64 {
+        let mut next = vec![];
+        for a in serve(d, todo) {
+            match a {
+                Action::Call(c) if c.tag.starts_with("pic:") => {
+                    assert!(c.raw.is_some() && c.method == crate::feat::Method::Get, "a raw read: {c:?}");
+                    let p = crate::feat::query(&c.path, "path").unwrap_or_default();
+                    if !d["pic_calls"].is_array() {
+                        d["pic_calls"] = json!([]);
+                    }
+                    d["pic_calls"].as_array_mut().unwrap().push(p.clone().into());
+                    let r = match d["pic_answers"][&p].as_array() {
+                        Some(x) => (x[0].as_u64().unwrap() as u16, x[1].as_str().unwrap().as_bytes().to_vec(), "text/plain".into()),
+                        None => {
+                            let (code, body) = crate::feat::answer_from(d, "GET", &c.path, &J::Null, &mut |_, _| {});
+                            let (b, ct) = if code == 200 { crate::client::raw_of(&body) } else { (body.to_string().into_bytes(), "application/json".into()) };
+                            (code, b, ct)
+                        }
+                    };
+                    next.extend(on_bytes(&Ctx { data: d }, &c, Ok(r)));
+                }
+                Action::Set { key, value } if key == KEY => {
+                    d["monitor"] = value.clone();
+                    out.push(Action::Set { key, value });
+                }
+                other => out.push(other),
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        todo = next;
+    }
+    out
+}
+
+fn pic_calls(d: &mut J) -> Vec<String> {
+    let v = d["pic_calls"].as_array().cloned().unwrap_or_default();
+    d["pic_calls"] = json!([]);
+    v.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect()
+}
+
+/// The `pictures` fixture's data, the view opened on `key`, everything served.
+fn pics_on(d: &mut J, key: &str) -> Vec<Action> {
+    *STATE().lock().unwrap() = Model::default();
+    let mut all = { let a = run(d, "monitor_open", json!({})).unwrap(); serve_all(d, a) };
+    all.extend({ let a = run(d, "monitor_select", json!({ "key": key })).unwrap(); serve_all(d, a) });
+    all
+}
+
+fn shown_images(acts: &[Action]) -> Vec<String> {
+    acts.iter().filter_map(|a| match a {
+        Action::Image { key, bytes } if !bytes.is_empty() => Some(key.clone()),
+        _ => None,
+    }).collect()
+}
+
+fn forgotten(acts: &[Action]) -> Vec<String> {
+    acts.iter().filter_map(|a| match a {
+        Action::Image { key, bytes } if bytes.is_empty() => Some(key.clone()),
+        _ => None,
+    }).collect()
+}
+
+/// The `image` and muted-line nodes drawn under a prompt of the person's.
+fn drawn_pics(n: &Node, id: &str) -> (Vec<String>, Vec<String>) {
+    let Some(row) = find(n, &format!("monitor-pics-{id}")) else { return (vec![], vec![]) };
+    let mut all = vec![];
+    walk(row, &mut all);
+    let imgs = all.iter().filter(|x| matches!(x.kind, crate::luau::Kind::Image)).map(|x| x.key.clone().unwrap_or_default()).collect();
+    let notes = all.iter().filter(|x| matches!(x.kind, crate::luau::Kind::Text)).map(|x| x.text.clone()).collect();
+    (imgs, notes)
+}
+
+fn first_you(v: &J) -> J {
+    conv_rows(v).into_iter().find(|r| r["t"] == "you").expect("a prompt of the person's")
+}
+
+#[test]
+fn only_the_person_s_sent_pictures_are_paths_to_read() {
+    use super::pics::{paths_in, picture_path};
+    for ok in ["/tmp/sbxw-pastes/paste-1.png", "/tmp/sbxw-pastes/a.JPG", "/tmp/sbxw-pastes/a.jpeg", "/tmp/sbxw-pastes/a.webp", "/tmp/sbxw-pastes/a.gif", "/tmp/sbxw-uploads/7/shot.png"] {
+        assert_eq!(picture_path(ok), Some(ok), "{ok}");
+    }
+    for no in [
+        "/tmp/sbxw-pastes/../etc/x.png",
+        "/tmp/sbxw-pastes/..png",
+        "/tmp/sbxw-pastes/a/b.png",
+        "/tmp/sbxw-pastes/.hidden.png",
+        "/tmp/sbxw-pastes/.png",
+        "/tmp/sbxw-pastes/a.svg",
+        "/tmp/sbxw-pastes/a.png.txt",
+        "/tmp/sbxw-pastes/a",
+        "/tmp/sbxw-uploads/a.png",
+        "/tmp/sbxw-uploads/7/../../x.png",
+        "/tmp/sbxw-uploads/x7/a.png",
+        "/tmp/sbxw-uploads/7/a/b.png",
+        "/home/me/a.png",
+        "/tmp/other/a.png",
+        "tmp/sbxw-pastes/a.png",
+        "/tmp/sbxw-pastes/a\u{202e}gnp.png",
+        "/tmp/sbxw-pastes/a\\b.png",
+    ] {
+        assert_eq!(picture_path(no), None, "{no:?}");
+    }
+    assert_eq!(paths_in("see /tmp/sbxw-pastes/a.png and /tmp/sbxw-pastes/a.png, /tmp/sbxw-uploads/2/b.jpg\n- /tmp/sbxw-pastes/c.webp"), ["/tmp/sbxw-pastes/a.png", "/tmp/sbxw-uploads/2/b.jpg", "/tmp/sbxw-pastes/c.webp"]);
+}
+
+/// The fixture: shop-web main's first prompt names a pasted screenshot and
+/// an uploaded mock (both in the sandbox) and a paste that is gone; Claude's
+/// reply quotes the paste's path.
+#[test]
+fn a_prompt_with_sent_pictures_reads_each_once_and_draws_them_under_its_text() {
+    let mut d = data_of("pictures");
+    let all = pics_on(&mut d, "shop-web:s-shop-main");
+    let mut asked = pic_calls(&mut d);
+    asked.sort();
+    assert_eq!(asked, ["/tmp/sbxw-pastes/paste-1763461000000.png", "/tmp/sbxw-pastes/paste-1763461690000.png", "/tmp/sbxw-uploads/3/checkout-mock.png"], "each of the prompt's pictures once, nothing from the reply");
+    let shown = shown_images(&all);
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    let you = first_you(&d["monitor"]);
+    let pics = you["pics"].as_array().unwrap();
+    assert_eq!(pics.len(), 3);
+    assert!(pics[0]["key"].is_string() && pics[1]["key"].is_string());
+    assert_eq!(pics[2]["note"], super::pics::GONE, "the gone paste says so, quietly");
+    // Scaled within the preview's bounds, and no error notice for the gone one.
+    assert!(pics.iter().filter(|p| p["w"].is_u64()).all(|p| p["w"].as_u64().unwrap() <= super::pics::FIT as u64 && p["h"].as_u64().unwrap() <= super::pics::FIT as u64));
+    assert!(!all.iter().any(|a| matches!(a, Action::Notice { .. })), "no notice");
+    // Drawn: two `image`s and the muted line, under the text, no control.
+    let n = host().render(&d).unwrap();
+    let (imgs, notes) = drawn_pics(&n, you["id"].as_str().unwrap());
+    assert_eq!(imgs.len(), 2, "{imgs:?}");
+    assert_eq!(notes, [super::pics::GONE]);
+    let row = find(&n, &format!("monitor-pics-{}", you["id"].as_str().unwrap())).unwrap();
+    assert!(controls(row).is_empty(), "a preview has no action: {:?}", controls(row));
+    // Claude's reply holding the same path: no preview drawn for it.
+    let reply = conv_rows(&d["monitor"]).into_iter().find(|r| r["t"] == "claude" && r["text"].as_str().unwrap().contains("/tmp/sbxw-pastes/")).unwrap();
+    assert!(reply["pics"].is_null());
+    assert!(find(&n, &format!("monitor-pics-{}", reply["id"].as_str().unwrap())).is_none());
+    // Redraws, a refresh, a nudge read of the history: nothing read again.
+    for _ in 0..3 {
+        { let a = run(&d, "monitor_refresh", json!({})).unwrap(); serve_all(&mut d, a) };
+        host().render(&d).unwrap();
+    }
+    let nudge = on_event(&Ctx { data: &d }, "history", &json!({ "sandbox": "shop-web", "session_id": "s-shop-main", "seq": 9 }));
+    let more = serve_all(&mut d, nudge);
+    assert!(pic_calls(&mut d).is_empty(), "each read once");
+    assert!(shown_images(&more).is_empty());
+}
+
+#[test]
+fn an_agent_s_reply_a_step_or_a_question_holding_a_path_reads_nothing() {
+    let mut d = data_of("basic");
+    let p = "/tmp/sbxw-pastes/paste-1.png";
+    put_pic(&mut d, p, &png_of(40, 30));
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": [
+        it(1, "user_prompt", json!({ "text": "hello" })),
+        it(2, "assistant_text", json!({ "text": format!("Look at {p}") })),
+        it(3, "tool_call", json!({ "tool": { "name": "Bash", "summary": format!("open {p}"), "id": "t1" } })),
+        it(4, "tool_result", json!({ "result": { "status": "ok", "size": 10, "head": p, "id": "t1" } })),
+        it(5, "injected", json!({ "text": format!("from the lead: {p}"), "from": "lead" })),
+        it(6, "notice", json!({ "text": p })),
+        it(7, "question", json!({ "text": p, "steps": [{ "text": p, "options": ["a"] }] })),
+    ] }));
+    let all = pics_on(&mut d, "billing-api:s-bill-main");
+    assert!(pic_calls(&mut d).is_empty(), "agent text makes the app fetch nothing");
+    assert!(shown_images(&all).is_empty());
+    assert!(conv_rows(&d["monitor"]).iter().all(|r| r["pics"].is_null()));
+    let n = host().render(&d).unwrap();
+    let mut els = vec![];
+    walk(&n, &mut els);
+    assert!(!els.iter().any(|x| matches!(x.kind, crate::luau::Kind::Image)));
+}
+
+#[test]
+fn a_path_outside_the_two_folders_with_dots_or_another_extension_reads_nothing() {
+    let mut d = data_of("basic");
+    let text = "see /tmp/sbxw-pastes/../../etc/a.png /tmp/elsewhere/a.png /tmp/sbxw-pastes/a.svg /tmp/sbxw-uploads/1/../a.png /home/me/b.png /tmp/sbxw-pastes/x/y.png";
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": [it(1, "user_prompt", json!({ "text": text }))] }));
+    pics_on(&mut d, "billing-api:s-bill-main");
+    assert!(pic_calls(&mut d).is_empty());
+    assert!(first_you(&d["monitor"])["pics"].is_null());
+}
+
+#[test]
+fn a_picture_too_large_or_not_a_picture_says_so_in_one_muted_line() {
+    let mut d = data_of("basic");
+    let (big, bad, gif, ok) = ("/tmp/sbxw-pastes/big.png", "/tmp/sbxw-uploads/2/bad.jpg", "/tmp/sbxw-pastes/anim.gif", "/tmp/sbxw-pastes/ok.webp");
+    // The daemon's refusal past `max` (sandbox_fs.rs), a file that is no picture.
+    d["pic_answers"][big] = json!([404, "{\"error\":\"/tmp/sbxw-pastes/big.png: too large to open here (30000000 bytes)\"}"]);
+    d["files_content"][bad] = json!({ "$raw_hex": hex(b"not a jpeg at all"), "$type": "image/jpeg" });
+    put_pic(&mut d, ok, &png_of(10, 10));
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": [it(1, "user_prompt", json!({ "text": format!("{big} {bad} {gif} {ok}") }))] }));
+    let all = pics_on(&mut d, "billing-api:s-bill-main");
+    let mut asked = pic_calls(&mut d);
+    asked.sort();
+    assert_eq!(asked, [bad, big, ok], "a GIF is not read: it would not decode");
+    let you = first_you(&d["monitor"]);
+    let notes: Vec<&str> = you["pics"].as_array().unwrap().iter().filter_map(|p| p["note"].as_str()).collect();
+    assert_eq!(notes, [super::pics::TOO_LARGE, super::pics::UNREADABLE, super::pics::GIF]);
+    assert!(!all.iter().any(|a| matches!(a, Action::Notice { .. })), "never an error notice");
+    let n = host().render(&d).unwrap();
+    let (imgs, drawn) = drawn_pics(&n, you["id"].as_str().unwrap());
+    assert_eq!((imgs.len(), drawn.len()), (1, 3));
+    // The read's own cap is the Files view's.
+    let mut d2 = data_of("basic");
+    put_log(&mut d2, "billing-api", "s-bill-main", json!({ "items": [it(1, "user_prompt", json!({ "text": ok }))] }));
+    let a = {
+        *STATE().lock().unwrap() = Model::default();
+        { let a = run(&d2, "monitor_open", json!({})).unwrap(); serve(&mut d2, a) };
+        { let a = run(&d2, "monitor_select", json!({ "key": "billing-api:s-bill-main" })).unwrap(); serve(&mut d2, a) }
+    };
+    let c = a.iter().find_map(|x| match x {
+        Action::Call(c) if c.tag.starts_with("pic:") => Some(c.clone()),
+        _ => None,
+    }).expect("the read");
+    assert_eq!(c.raw, Some(crate::feat::files::view::IMAGE_MAX));
+    assert!(c.path.starts_with("/api/sandboxes/billing-api/fs/file?path=%2Ftmp%2Fsbxw-pastes%2Fok.webp&max="), "{}", c.path);
+}
+
+#[test]
+fn another_session_or_leaving_the_view_forgets_every_preview() {
+    let mut d = data_of("pictures");
+    let all = pics_on(&mut d, "shop-web:s-shop-main");
+    let mut keys = shown_images(&all);
+    keys.sort();
+    assert_eq!(keys.len(), 2);
+    let out = { let a = run(&d, "monitor_select", json!({ "key": "billing-api:s-bill-main" })).unwrap(); serve_all(&mut d, a) };
+    let mut gone = forgotten(&out);
+    gone.sort();
+    assert_eq!(gone, keys, "both forgotten");
+    assert!(STATE().lock().unwrap().pics.map.is_empty());
+    // Back: read again (they were forgotten), then the view left: forgotten again.
+    let out = { let a = run(&d, "monitor_select", json!({ "key": "shop-web:s-shop-main" })).unwrap(); serve_all(&mut d, a) };
+    assert_eq!(shown_images(&out).len(), 2);
+    assert_eq!(pic_calls(&mut d).len(), 3 + 3);
+    d["app"]["base"] = SCREEN.into();
+    let out = run(&d, "monitor_toggle", json!({})).unwrap();
+    assert_eq!(forgotten(&out).len(), 2, "{out:?}");
+    // The view closed by something else: the next event forgets them too.
+    let mut d = data_of("pictures");
+    pics_on(&mut d, "shop-web:s-shop-main");
+    d["app"]["overlay"] = J::Null;
+    let info = d["sessions"][0].clone();
+    let out = on_event(&Ctx { data: &d }, "session", &info);
+    assert_eq!(forgotten(&out).len(), 2);
+    assert!(STATE().lock().unwrap().pics.map.is_empty());
+}
+
+#[test]
+fn more_pictures_than_the_cap_keep_the_newest() {
+    let mut d = data_of("basic");
+    let n = super::pics::CAP + 4;
+    let mut items = vec![];
+    for i in 0..n as u64 {
+        let p = format!("/tmp/sbxw-pastes/paste-{i}.png");
+        put_pic(&mut d, &p, &png_of(8, 8));
+        items.push(it(i + 1, "user_prompt", json!({ "text": format!("shot {i}: {p}") })));
+    }
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": items }));
+    let all = pics_on(&mut d, "billing-api:s-bill-main");
+    let asked = pic_calls(&mut d);
+    assert_eq!(asked.len(), super::pics::CAP);
+    assert_eq!(asked[0], format!("/tmp/sbxw-pastes/paste-{}.png", n - 1), "the newest read first");
+    for i in 0..4 {
+        assert!(!asked.contains(&format!("/tmp/sbxw-pastes/paste-{i}.png")), "the oldest are not read");
+    }
+    assert_eq!(shown_images(&all).len(), super::pics::CAP);
+    let rows = conv_rows(&d["monitor"]);
+    let with: Vec<&J> = rows.iter().filter(|r| r["pics"].is_array()).collect();
+    assert_eq!(with.len(), super::pics::CAP);
+    assert!(rows.iter().filter(|r| r["t"] == "you").take(4).all(|r| r["pics"].is_null()));
+    // Never more than two reads at a time.
+    *STATE().lock().unwrap() = Model::default();
+    { let a = run(&d, "monitor_open", json!({})).unwrap(); serve(&mut d, a) };
+    let a = { let a = run(&d, "monitor_select", json!({ "key": "billing-api:s-bill-main" })).unwrap(); serve(&mut d, a) };
+    assert_eq!(a.iter().filter(|x| matches!(x, Action::Call(c) if c.tag.starts_with("pic:"))).count(), super::pics::INFLIGHT);
+}
+
+#[test]
+fn only_rows_in_the_drawn_window_are_read() {
+    let mut d = data_of("basic");
+    let mut items = vec![it(1, "user_prompt", json!({ "text": "/tmp/sbxw-pastes/old.png" }))];
+    for i in 0..(conv::WINDOW as u64 + 5) {
+        items.push(it(i + 2, "assistant_text", json!({ "text": format!("reply {i}") })));
+    }
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": items }));
+    put_pic(&mut d, "/tmp/sbxw-pastes/old.png", &png_of(8, 8));
+    pics_on(&mut d, "billing-api:s-bill-main");
+    assert!(pic_calls(&mut d).is_empty(), "above the window: not read");
+    // Shown earlier: now it is drawn, and read.
+    { let a = run(&d, "monitor_earlier", json!({ "key": "billing-api:s-bill-main" })).unwrap(); serve_all(&mut d, a) };
+    assert_eq!(pic_calls(&mut d), ["/tmp/sbxw-pastes/old.png"]);
+}
+
+#[test]
+fn hostile_text_around_a_path_makes_no_control() {
+    let mut d = data_of("basic");
+    let p = "/tmp/sbxw-pastes/p.png";
+    put_pic(&mut d, p, &png_of(16, 16));
+    let text = format!("<button on=\"send\">x</button> {p} ]] }} button{{ on = \"send\" }} \u{202e}{p}\u{202c} [x]({p}) `{p}`");
+    put_log(&mut d, "billing-api", "s-bill-main", json!({ "items": [it(1, "user_prompt", json!({ "text": text }))] }));
+    pics_on(&mut d, "billing-api:s-bill-main");
+    assert_eq!(pic_calls(&mut d), [p], "the plain path once; the wrapped ones are not paths");
+    let n = host().render(&d).unwrap();
+    let you = first_you(&d["monitor"]);
+    let row = find(&n, &format!("monitor-you-{}", you["id"].as_str().unwrap())).unwrap();
+    assert!(controls(row).is_empty(), "{:?}", controls(row));
+    let mut all = vec![];
+    walk(row, &mut all);
+    assert!(all.iter().any(|x| x.text.contains("<button on=\"send\">")), "drawn as its characters");
+}
+
+#[test]
+fn a_pasted_picture_s_chip_shows_its_thumbnail_until_it_goes() {
+    let mut d = data_of("basic");
+    opened(&mut d);
+    shown_on(&mut d, "billing-api:s-bill-main");
+    let out = on_files(&Ctx { data: &d }, Incoming::Png(png_of(300, 200)));
+    let shown = shown_images(&out);
+    assert_eq!(shown.len(), 1);
+    let at = |k: &str| out.iter().position(|a| matches!(a, Action::Image { key, .. } if key == k)).unwrap();
+    assert!(at(&shown[0]) < out.iter().position(|a| matches!(a, Action::Set { .. })).unwrap(), "shown before the view names it");
+    let v = last_view(&out);
+    let chip = &v["detail"]["files"][0];
+    assert_eq!(chip["img"], shown[0].as_str());
+    d["monitor"] = v;
+    let n = host().render(&d).unwrap();
+    let id = chip["id"].as_u64().unwrap();
+    let c = find(&n, &format!("monitor-file-{id}")).unwrap();
+    let mut all = vec![];
+    walk(c, &mut all);
+    assert!(all.iter().any(|x| matches!(x.kind, crate::luau::Kind::Image)), "its thumbnail drawn");
+    // Removed: forgotten.
+    let out = run(&d, "monitor_attach_remove", json!({ "key": "billing-api:s-bill-main", "id": id })).unwrap();
+    assert_eq!(forgotten(&out), [shown[0].clone()]);
+    // A file attached by its path: no thumbnail (the feature reads no local path).
+    let dir = tmp_dir("thumb");
+    let f = file_in(&dir, "shot.png", &png_of(20, 20));
+    let out = on_files(&Ctx { data: &d }, Incoming::Files(vec![f]));
+    assert!(shown_images(&out).is_empty());
+    assert!(last_view(&out)["detail"]["files"][0]["img"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
+    // Sent: forgotten with the files.
+    let out = on_files(&Ctx { data: &d }, Incoming::Png(png_of(30, 20)));
+    let k = shown_images(&out)[0].clone();
+    let out = on_answer(&Ctx { data: &d }, &Call::post("/api/chat/push", json!({}), "send").tag("send:billing-api:s-bill-main"), Ok((200, json!({ "ok": true }))));
+    assert!(forgotten(&out).contains(&k), "{out:?}");
+}
+
+/// The whole window, at three widths: each preview inside the conversation's column.
+#[test]
+fn previews_stay_inside_the_conversation_at_every_width() {
+    use crate::shell::{view as shell_view, App};
+    let fx = format!("{}/fixtures/monitor/pictures.json", env!("CARGO_MANIFEST_DIR"));
+    let quiet = |rt: &mut rune::Runtime<App>| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            rt.frame(0.05);
+            rt.update(|s, tx| {
+                s.poll(0.0, tx);
+            });
+            if rt.state.link_quiet() {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "the fixture's link never settled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        for _ in 0..8 {
+            rt.frame(0.05);
+        }
+    };
+    for (w, h) in [(1284.0, 1400.0), (720.0, 1400.0), (420.0, 1400.0)] {
+        let a = App::new(crate::shell::Args { fixture: Some(fx.clone()), ..Default::default() });
+        let mut rt = rune::Runtime::new(a, shell_view, (w, h), rune::Env::new(true, 1.0));
+        quiet(&mut rt);
+        if w < 1000.0 {
+            rt.update(|s, _| s.toggle_sidebar());
+        }
+        let l = crate::intent::parse(&json!({ "kind": "intent", "name": "monitor_open", "args": {} })).unwrap();
+        rt.update(|s, _| l.into_iter().for_each(|i| s.run_intent("test", i)));
+        quiet(&mut rt);
+        let (x, y) = rt.find("monitor-row-shop-web:s-shop-main").expect("shop-web main's row");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        quiet(&mut rt);
+        quiet(&mut rt);
+        let els = rt.elements();
+        let conv = els.iter().find(|e| e.key.as_deref() == Some("monitor-conv-shop-web:s-shop-main")).map(|e| e.rect).unwrap_or_else(|| panic!("{w}: the conversation"));
+        let pics: Vec<_> = els.iter().filter(|e| !e.exiting && e.key.as_deref().is_some_and(|k| k.starts_with("monitor-pics-"))).collect();
+        assert_eq!(pics.len(), 1, "{w}: the prompt's previews laid out");
+        let r = pics[0].rect;
+        assert!(r[0] >= conv[0] - 0.5 && r[0] + r[2] <= conv[0] + conv[2] + 0.5, "{w}: {r:?} inside {conv:?}");
+        assert!(r[3] <= 120.5 + 0.5 && r[3] >= 16.0, "{w}: at most a preview high: {r:?}");
+    }
+}
