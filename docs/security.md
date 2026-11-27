@@ -443,6 +443,12 @@ write; read it.
   stdin. It is not sent to a remote host whose `trust_secrets` is false.
 - `[env]` is **not** for secrets: it lands in argv and usually in a committed
   file.
+- An MCP server's header secret is a `${key}` placeholder, its value stored by
+  `sbx secret set` as `mcp:<server>:<key>`. A header whose name says it carries
+  a credential (`Authorization`, `Cookie`, a name with `auth`, `token`,
+  `secret`, `key`...) is refused without one, by the daemon for every caller
+  (web UI, desktop app, Jarvis), so a secret typed in clear never reaches sbx's
+  command line, its stored definition or `sbx mcp ls`.
 
 ## Host changes
 

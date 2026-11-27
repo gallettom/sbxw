@@ -737,3 +737,123 @@ fn edit_prefills_the_listed_client_id_and_its_secret_stays_unchanged_if_empty() 
     f.act("mcp-kind", json!("stdio"));
     assert!(f.find("mcp-client-id").is_none());
 }
+
+// ── A credential header takes a ${KEY} (the core's rule, on its table) ───
+
+/// The table the core and the web UI are tested on.
+const HEADER_CASES: &str = include_str!("../../../../tests/js/mcp-header-cases.json");
+
+fn header_cases() -> J {
+    serde_json::from_str(HEADER_CASES).unwrap()
+}
+
+fn strs(v: &J) -> Vec<String> {
+    v.as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect()
+}
+
+fn refusal_of(c: &J, name: &str) -> String {
+    let example = c["example"].get(name.to_ascii_lowercase().as_str()).unwrap_or(&c["example"]["other"]).as_str().unwrap();
+    c["message"].as_str().unwrap().replace("NAME", name).replace("EXAMPLE", example)
+}
+
+#[test]
+fn the_shared_table_is_the_intents_rule_and_the_screens() {
+    let c = header_cases();
+    assert_eq!(strs(&c["words"]), CREDENTIAL_WORDS);
+    let data = fixture("full");
+    let save = |h: &str| run(&data, "mcp_save", json!({ "name": "acme", "kind": "remote", "url": "https://x", "headers": h }));
+    for name in strs(&c["credential"]) {
+        assert!(credential_header(&name), "{name}");
+        for v in strs(&c["values"]["ok"]) {
+            assert!(save(&format!("{name}: {v}")).is_ok(), "{name}: {v}");
+        }
+        for v in strs(&c["values"]["refused"]) {
+            assert_eq!(save(&format!("{name}: {v}")).unwrap_err(), refusal_of(&c, &name), "{name}: {v}");
+        }
+    }
+    for name in strs(&c["free"]) {
+        assert!(!credential_header(&name), "{name}");
+        for v in strs(&c["values"]["refused"]) {
+            assert!(save(&format!("{name}: {v}")).is_ok(), "{name}: {v}");
+        }
+    }
+    // The screen's copy: a Custom row of each name, a refused value and a placeholder.
+    let mut f = remote_form("acme");
+    f.press("mcp-h-add");
+    f.act("mcp-h-name-1", json!("custom"));
+    for name in strs(&c["credential"]).into_iter().chain(strs(&c["free"])) {
+        f.typed("mcp-h-custom-1", &name);
+        f.typed("mcp-h-value-1", "Bearer abc123");
+        let t = f.texts();
+        let refused = credential_header(&name);
+        assert_eq!(t.contains(&refusal_of(&c, &name)), refused, "{name}: {t:?}");
+        assert_eq!(f.find("mcp-save").unwrap().disabled, refused, "{name}");
+        f.typed("mcp-h-value-1", "Bearer ${token}");
+        assert!(f.find("mcp-h-why-1").is_none() && !f.find("mcp-save").unwrap().disabled, "{name}");
+    }
+}
+
+#[test]
+fn a_literal_credential_shows_its_reason_under_the_row_and_save_is_off() {
+    let c = header_cases();
+    let mut f = remote_form("acme");
+    f.press("mcp-h-add");
+    // A picked name.
+    f.typed("mcp-h-value-1", "Bearer ghp_Sup3rS3cret");
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "mcp-h-why-1") && t.contains(&refusal_of(&c, "Authorization")), "{t:?}");
+    assert!(!t.iter().any(|x| x.contains("Sup3r") && x != "Bearer ghp_Sup3rS3cret"), "the reason holds no part of the value: {t:?}");
+    assert!(f.find("mcp-save").unwrap().disabled && f.press("mcp-save").is_empty(), "never sent");
+    for pick in ["X-API-Key", "Api-Key", "Cookie"] {
+        f.act("mcp-h-name-1", json!(pick));
+        assert!(f.texts().contains(&refusal_of(&c, pick)), "{pick}");
+    }
+    // A placeholder lifts it.
+    f.act("mcp-h-name-1", json!("Authorization"));
+    f.typed("mcp-h-value-1", "Bearer ${TOKEN}");
+    assert!(f.find("mcp-h-why-1").is_none());
+    assert_eq!(f.press("mcp-save")[0]["args"]["headers"], "Authorization: Bearer ${TOKEN}");
+    // A harmless Custom header stays free.
+    f.press("mcp-h-add");
+    f.act("mcp-h-name-2", json!("custom"));
+    f.typed("mcp-h-custom-2", "X-MCP-Toolsets");
+    f.typed("mcp-h-value-2", "repos");
+    assert!(f.find("mcp-h-why-2").is_none() && !f.find("mcp-save").unwrap().disabled);
+}
+
+#[test]
+fn the_confirm_is_never_opened_with_a_literal_credential() {
+    let data = fixture("full");
+    let e = run(&data, "mcp_save", json!({ "name": "acme", "kind": "remote", "url": "https://x", "headers": "Accept: application/json\nAuthorization: Bearer ghp_Sup3rS3cret" })).unwrap_err();
+    assert_eq!(e, "Authorization carries a credential: write its value with a placeholder, such as `Bearer ${token}`, and sbxw asks for the secret separately");
+    for h in ["x-api-key: abc", "Cookie: sid=abc; Accept: x", "X-Auth-Token: ${"] {
+        let r = run(&data, "mcp_save", json!({ "name": "acme", "kind": "remote", "url": "https://x", "headers": h, "replace": "acme" }));
+        assert!(r.as_ref().is_err_and(|e| e.contains("carries a credential") && !e.contains("abc")), "{h}: {r:?}");
+    }
+    // A placeholder: the one Confirm, as before.
+    let c = one_confirm(run(&data, "mcp_save", json!({ "name": "acme", "kind": "remote", "url": "https://x", "headers": "Authorization: Bearer ${TOKEN}" })));
+    assert!(c.lines.iter().any(|l| l == "Headers: Authorization: Bearer ${TOKEN}"), "{:?}", c.lines);
+}
+
+#[test]
+fn an_edit_of_a_server_with_a_literal_credential_shows_it_refused_and_never_sends_it_back() {
+    let c = header_cases();
+    let old = json!({ "name": "old", "type": "remote", "detail": { "url": "https://old.example/mcp",
+        "headers": ["Authorization: Bearer ghp_registeredBefore", "X-MCP-Toolsets: repos"] } });
+    let mut f = Form::new(listed(json!([old])));
+    f.press("mcp-edit-old");
+    // Pre-filled as listed, the reason under it, Save off.
+    assert_eq!(f.find("mcp-h-value-1").unwrap().value, json!("Bearer ghp_registeredBefore"));
+    let t = f.texts();
+    assert!(t.iter().any(|x| x == "mcp-h-why-1") && t.contains(&refusal_of(&c, "Authorization")), "{t:?}");
+    assert!(f.find("mcp-h-why-2").is_none());
+    assert!(f.find("mcp-save").unwrap().disabled && f.press("mcp-save").is_empty(), "the literal is never sent back");
+    // Replaced by a placeholder: saved with replace, and the token is asked in the Confirm.
+    f.typed("mcp-h-value-1", "Bearer ${TOKEN}");
+    let sent = f.press("mcp-save");
+    assert_eq!(sent[0]["args"]["headers"], "Authorization: Bearer ${TOKEN}\nX-MCP-Toolsets: repos");
+    assert_eq!(sent[0]["args"]["replace"], "old");
+    let confirm = one_confirm(run(&fixture("full"), "mcp_save", sent[0]["args"].clone()));
+    assert!(confirm.secrets.iter().any(|s| s.field == "secrets.TOKEN"));
+    assert!(!confirm.lines.iter().any(|l| l.contains("ghp_")), "{:?}", confirm.lines);
+}

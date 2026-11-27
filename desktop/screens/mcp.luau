@@ -11,7 +11,9 @@
 -- else the first running one. Picking another asks `mcp_pick`.
 --
 -- Headers: one row each, a name picked (or Custom) and a value; sent as
--- "Name: value" lines. A value holding ";" is refused in the form.
+-- "Name: value" lines. A value holding ";" is refused in the form, and so is
+-- a credential header (Authorization, Cookie, a name with key, token...)
+-- whose value holds no ${KEY}.
 --
 -- OAuth client ID (remote only, optional): for a server with no dynamic
 -- client registration (GitHub). Filled, the next dialog also asks the
@@ -70,6 +72,27 @@ local function value_hint(name)
   return "value, or ${SECRET}"
 end
 
+-- The core's credential header rule (crates/core/src/mcp.rs, header_refusal;
+-- tests/js/mcp-header-cases.json): a name carries a credential when one of
+-- its word parts (split at every character not a letter or a digit) starts
+-- or ends with one of these words; its value then needs a ${KEY}. The reason
+-- names the header only, never a part of its value.
+local CREDENTIAL_WORDS = { "auth", "token", "secret", "password", "passwd", "credential", "session", "cookie", "key" }
+local function credential_header(name)
+  for part in string.gmatch(string.lower(name or ""), "[%w]+") do
+    for _, w in ipairs(CREDENTIAL_WORDS) do
+      if string.sub(part, 1, #w) == w or (#part >= #w and string.sub(part, -#w) == w) then return true end
+    end
+  end
+  return false
+end
+local function credential_problem(n, v)
+  if not credential_header(n) or string.find(v, "%${[%w_%-]+}") then return nil end
+  local l = string.lower(n)
+  local example = (l == "authorization" or l == "proxy-authorization") and "Bearer ${token}" or "${token}"
+  return n .. " carries a credential: write its value with a placeholder, such as `" .. example .. "`, and sbxw asks for the secret separately"
+end
+
 -- A row's header name: the picked one, or the one typed for Custom.
 local function row_name(r)
   if r.pick == CUSTOM then return trim(r.name) end
@@ -89,7 +112,9 @@ local function row_problem(r, seen)
   if string.find(n, "[^%w!#%$%%&'%*%+%-%.%^_`|~]") then return "A header name is letters, digits and - _ . only (no space, \":\" or \";\")" end
   if string.find(v, ";", 1, true) then return "A value cannot hold \";\": sbxw sends headers separated by \";\". Put it in a secret, ${NAME}, instead" end
   if seen[string.lower(n)] then return n .. " is already set above" end
-  return nil
+  -- Also a row Edit filled from a server registered before the rule: shown
+  -- as listed, never sent back until its value is a placeholder.
+  return credential_problem(n, v)
 end
 
 -- The rows as the intent's `headers`: "Name: value" lines, rows with an empty
