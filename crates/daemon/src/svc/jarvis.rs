@@ -802,10 +802,11 @@ mod tests {
         assert!(done.results[0].message.contains("from the next sentence") && !done.results[0].restart, "{:?}", done.results[0]);
         let text = std::fs::read_to_string(&file).unwrap();
         assert_eq!(text, "# mine\nkeep_awake = \"off\"\n\n[voice.words]\nnginx = { en = \"engine X\" }\n");
-        assert_eq!(app.voice_words()["sbxw"].fr.as_deref(), "live, no restart");
+        assert_eq!(app.voice_words()["nginx"].en.as_deref(), Some("engine X"), "live, no restart");
+        assert!(!app.voice_words().contains_key("sbxw"), "the built-in word is not configured");
         let state = app.jarvis_state().await;
         let origins: Vec<(String, String)> = state["voice_words"].as_array().unwrap().iter().map(|w| (w["word"].as_str().unwrap().into(), w["origin"].as_str().unwrap().into())).collect();
-        assert_eq!(origins, [("nginx".to_string(), "configured".to_string()), ("sbxw".into(), "replaces_built_in".into())]);
+        assert_eq!(origins, [("nginx".to_string(), "configured".to_string()), ("sbxw".into(), "built_in".into())]);
     }
 
     /// The desktop app's builtin/ as it writes it at each start (copies in
